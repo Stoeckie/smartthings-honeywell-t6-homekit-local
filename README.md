@@ -20,7 +20,7 @@ The complete HomeKit controller (pair setup with SRP-6a, Ed25519, X25519, ChaCha
 
 * SmartThings hub with Edge (v2, v3/Aeotec, Station)
 * Honeywell Lyric T6 or T6R with Wi-Fi, on the same network as the hub
-* The 8-digit **HomeKit code**: on a sticker on the wall plate (behind the thermostat) or in the quick start guide
+* HomeKit active on the thermostat (advanced menu, RESET, HomeKit). The T6 shows a **new 8-digit code on its display** for every pairing attempt; the sticker code does not work.
 * The thermostat must **not** be paired with Apple Home or another HomeKit controller (HomeKit accepts one owner). Remove it there first, or reset only HomeKit on the thermostat: advanced menu, RESET, HomeKit. Do not do a factory reset, that also clears your installer settings (OpenTherm etc.).
 
 The Resideo app and the cloud integration keep working next to this driver; you can remove the cloud integration from SmartThings once this one runs.
@@ -29,14 +29,14 @@ The Resideo app and the cloud integration keep working next to this driver; you 
 
 1. Enroll your hub in the channel: https://bestow-regional.api.smartthings.com/invite/qWjBdybRNG2y (Stoeckie Edge Drivers) and install **Honeywell T6 (HomeKit local)**.
 2. SmartThings app: **Add device → Scan nearby**. A "Honeywell T6" device appears (found via mDNS).
-3. Open the device → Settings → **HomeKit code**. Digits only or with dashes, both work.
-4. Pairing runs once on the hub and takes 1 to 3 minutes (3072-bit SRP in Lua). Reconnects only take a few seconds.
+3. The hub starts pairing by itself and the thermostat shows a code. Open the device → Settings → **HomeKit code** and type that code within 5 minutes (digits only or with dashes).
+4. Pairing then takes 1 to 2 minutes on the hub (3072-bit SRP in Lua). A wrong code starts a new attempt after 10 s with a new code on the display. Reconnects only take a few seconds.
 
 ## Settings
 
 | Setting | Meaning |
 |---|---|
-| HomeKit code | 8 digits from the wall plate sticker, needed once |
+| HomeKit code | the 8 digits the thermostat shows while pairing, needed once |
 | Thermostat IP | `auto` (mDNS) or a fixed IP |
 | HomeKit port | `0` = auto (mDNS); set it together with a fixed IP |
 | Remove pairing | Unpairs the hub from the thermostat, e.g. before re-pairing |
@@ -50,7 +50,7 @@ SmartThings has no routine trigger for "device offline". Make a routine: if Hone
 ## Troubleshooting
 
 * **Not found by Scan nearby**: check that the thermostat is on Wi-Fi (Resideo app works) and in the same subnet as the hub. A device "Honeywell T6" is created anyway; set IP and port by hand.
-* **"HomeKit error 2"**: wrong code. **"HomeKit error 6"**: already paired with another controller (Apple Home): remove it there or reset HomeKit on the thermostat.
+* **"HomeKit error 2"**: wrong code (use the code on the display, not the sticker). **"HomeKit error 6"**: already paired with another controller (Apple Home): remove it there or reset HomeKit on the thermostat.
 * Logs: `smartthings edge:drivers:logcat <driverId> --hub-address <hub-ip>`, lines start with `[t6]`. After pairing the log shows model, firmware, supported modes and setpoint range.
 
 ## Privacy

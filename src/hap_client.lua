@@ -242,8 +242,19 @@ function Session:pair_setup(pin, controller_id, opts)
   local salt, B = tlv.get(r, T.salt), tlv.get(r, T.public_key)
   if not salt or not B then return nil, "M2: no salt/B" end
   progress("M2 received, computing SRP")
-  -- M3 (the slow part: two 3072-bit modpows)
-  local client = srp.new("Pair-Setup", pin, salt, B, M.random_bytes(32))
+  -- M3 (the slow part: two 3072-bit modpows). A does not depend on the code, so it is computed
+  -- first; accessories with a code on their display (Honeywell T6) only show it after M1, so pin may be
+  -- a function that waits for the user to type it.
+  local client = srp.new("Pair-Setup", "", salt, B, M.random_bytes(32))
+  yield()
+  if type(pin) == "function" then
+    progress("waiting for the code")
+    local perr
+    pin, perr = pin()
+    if not pin then return nil, "M3: " .. tostring(perr or "no code") end
+    progress("code received, computing SRP")
+  end
+  client.P = pin
   yield()
   local A, M1 = client:public_key(), client:proof()
   yield()

@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05a"
+local BUILD = "2026-11-05b"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -307,7 +307,7 @@ local function run_session(driver, dev)
   while c and not c.stopped do
     local pairing = load_pairing(dev)
     if not pairing then
-      log.info(TAG .. " not paired: enter the HomeKit code in the device settings")
+      log.info(TAG .. " not paired yet")
       return
     end
     local drop_reason
@@ -381,36 +381,56 @@ local function normalize_pin(pin)
   return d:sub(1, 3) .. "-" .. d:sub(4, 5) .. "-" .. d:sub(6, 8)
 end
 
+local CODE_WAIT = 300 -- seconds the hub waits for the code from the thermostat display
+
 local function pair(driver, dev)
-  if conns[dev.id] and conns[dev.id].pairing then return end
-  local pin = normalize_pin((dev.preferences or {}).homekitCode)
-  if not pin then
-    log.info(TAG .. " enter the 8-digit HomeKit code in the device settings to pair")
-    return
-  end
   conns[dev.id] = conns[dev.id] or { responses = {} }
-  conns[dev.id].pairing = true
+  local c = conns[dev.id]
+  if c.pairing then return end
+  c.pairing, c.new_pin = true, nil
+  local function again(delay)
+    dev.thread:call_with_delay(delay, function() if not load_pairing(dev) then pair(driver, dev) end end)
+  end
   cosock.spawn(function()
-    local c = conns[dev.id]
     refresh_address(dev)
     local sock, err = open_socket(dev, 120)
     if not sock then
-      log.error(TAG .. " pairing: " .. tostring(err) .. " (retry in 60 s)")
+      log.warn(TAG .. " pairing: " .. tostring(err) .. " (HomeKit not active? retry in 60 s)")
       c.pairing = false
-      dev.thread:call_with_delay(60, function() if not load_pairing(dev) then pair(driver, dev) end end)
+      again(60)
       return
     end
-    log.info(TAG .. " pairing with thermostat (takes 1 to 3 minutes on the hub)...")
     local t0 = now()
     local s = hap.session(sock, { host = "lyric" })
-    local p, perr = s:pair_setup(pin, uuid4(), { yield = function() cosock.socket.sleep(0) end,
+    -- The T6 shows a new 8-digit code on its display for every pairing attempt (the sticker code does
+    -- not work), so the hub starts pairing first and then waits for the user to type that code.
+    local function get_pin()
+      log.info(TAG .. " >>> the thermostat now shows a HomeKit code: enter it in the device settings"
+        .. " (HomeKit code) within 5 minutes")
+      local deadline = now() + CODE_WAIT
+      while not c.new_pin and now() < deadline and not c.stopped do cosock.socket.sleep(1) end
+      local pin = c.new_pin
+      c.new_pin = nil
+      if not pin then return nil, "no code entered within 5 minutes" end
+      return pin
+    end
+    log.info(TAG .. " pairing started")
+    local p, perr = s:pair_setup(get_pin, uuid4(), { yield = function() cosock.socket.sleep(0) end,
       progress = function(m) log.info(string.format("%s pairing: %s (%.0f s)", TAG, m, now() - t0)) end })
-    sock:close()
+    pcall(function() sock:close() end)
     c.pairing = false
     if not p then
-      log.error(TAG .. " pairing failed: " .. tostring(perr))
-      if not tostring(perr):find("HomeKit error") then -- network trouble: retry; wrong code: wait for a new code
-        dev.thread:call_with_delay(60, function() if not load_pairing(dev) then pair(driver, dev) end end)
+      local e = tostring(perr)
+      log.error(TAG .. " pairing failed: " .. e)
+      if e:find("HomeKit error 2") then
+        log.error(TAG .. " wrong code: a new attempt starts in 10 s, the thermostat then shows a new code")
+        again(10)
+      elseif e:find("HomeKit error [56]") then
+        log.error(TAG .. " the thermostat refuses pairing (already paired or too many tries):"
+          .. " Menu, RESET, HomeKit on the thermostat; retry in 10 min")
+        again(600)
+      else
+        again(60)
       end
       return
     end
@@ -514,7 +534,17 @@ local function info_changed(driver, dev, event, args)
   if old.ipAddress ~= new.ipAddress or old.hapPort ~= new.hapPort then
     if load_pairing(dev) then start_session(driver, dev) end
   end
-  if old.homekitCode ~= new.homekitCode and not load_pairing(dev) then pair(driver, dev) end
+  if old.homekitCode ~= new.homekitCode and not load_pairing(dev) then
+    local pin = normalize_pin(new.homekitCode)
+    local c = conns[dev.id]
+    if pin and c and c.pairing then
+      c.new_pin = pin
+      log.info(TAG .. " code received")
+    elseif pin then
+      log.warn(TAG .. " no pairing attempt was running: starting one now, enter the NEW code from the display")
+      pair(driver, dev)
+    end
+  end
 end
 
 local function device_removed(driver, dev)

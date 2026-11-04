@@ -82,7 +82,8 @@ package.loaded["log"] = { info = function(m) print("I " .. m) end, warn = functi
                           error = function(m) print("E " .. m) end, debug = function() end }
 STOP_AFTER_SLEEP = false
 local socketlib = { gettime = function() return py_time() end,
-  sleep = function(s) if s > 1 and STOP_AFTER_SLEEP then error("STOP") end end,
+  sleep = function(s) if SLEEP_HOOK then SLEEP_HOOK() end
+    if s > 1 and STOP_AFTER_SLEEP then error("STOP") end end,
   tcp = function() return py_tcp() end }
 package.loaded["cosock"] = { socket = socketlib, spawn = function(fn, name)
   local ok, err = pcall(fn); if not ok and not tostring(err):find("STOP") then print("task " .. tostring(name) .. " error: " .. tostring(err)) end end }
@@ -158,9 +159,20 @@ def test_driver_end_to_end(accessory):
 
     dev = lua.eval(b"NEW_DEVICE")(lua.table_from({
         b"id": b"t6", b"device_network_id": b"t6-hap-manual", b"label": b"Honeywell T6",
-        b"preferences": lua.table_from({b"homekitCode": PIN.replace(b"-", b""), b"ipAddress": b"127.0.0.1",
+        b"preferences": lua.table_from({b"homekitCode": b"", b"ipAddress": b"127.0.0.1",
                                         b"hapPort": PORT})}))
     drv = lua.eval(b"DRIVER")
+    # the T6 shows its code only after pairing has started: the user types it while the hub waits
+    g.TYPED_CODE = PIN.replace(b"-", b"")
+    lua.execute(b"""
+      SLEEP_HOOK = function()
+        local d = DEVICES[1]
+        if d.preferences.homekitCode == "" then
+          d.preferences.homekitCode = TYPED_CODE
+          DRIVER.lifecycle_handlers.infoChanged(DRIVER_OBJ, d, "infoChanged",
+            { old_st_store = { preferences = { homekitCode = "" } } })
+        end
+      end""")
     t0 = time.time()
     drv[b"lifecycle_handlers"][b"added"](lua.eval(b"DRIVER_OBJ"), dev)  # pairs, then runs the session
     print(f"pair+session {time.time() - t0:.1f}s")

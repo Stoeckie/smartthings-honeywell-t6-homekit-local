@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-04c"
+local BUILD = "2026-11-04d"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -123,6 +123,10 @@ local function parse_txt(txt)
     if type(tbl) ~= "table" then return end
     for k, v in pairs(tbl) do
       if type(k) == "number" then
+        if type(v) == "table" then -- the hub gives each record as a list of byte values
+          local ok, str = pcall(function() return string.char(table.unpack(v)) end)
+          v = ok and str or ""
+        end
         local kk, vv = tostring(v):match("^([^=]+)=(.*)$")
         if kk then t[kk:lower()] = vv end
       elseif type(k) == "string" and k ~= "text" then

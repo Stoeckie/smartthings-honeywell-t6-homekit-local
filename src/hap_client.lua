@@ -234,18 +234,23 @@ end
 function Session:pair_setup(pin, controller_id, opts)
   opts = opts or {}
   local yield = opts.yield or function() end
+  local progress = opts.progress or function() end
   -- M1
+  progress("M1 sent")
   local r, err = tlv_request(self, "/pair-setup", { { T.state, u8(1) }, { T.method, u8(opts.method or 0) } })
   if not r then return nil, "M2: " .. err end
   local salt, B = tlv.get(r, T.salt), tlv.get(r, T.public_key)
   if not salt or not B then return nil, "M2: no salt/B" end
+  progress("M2 received, computing SRP")
   -- M3 (the slow part: two 3072-bit modpows)
   local client = srp.new("Pair-Setup", pin, salt, B, M.random_bytes(32))
   yield()
   local A, M1 = client:public_key(), client:proof()
   yield()
+  progress("M3 sent")
   r, err = tlv_request(self, "/pair-setup", { { T.state, u8(3) }, { T.public_key, A }, { T.proof, M1 } })
   if not r then return nil, "M4: " .. err end
+  progress("M4 received")
   if not client:verify_server_proof(tlv.get(r, T.proof) or "") then return nil, "M4: accessory proof invalid" end
   local K = client:session_key()
   -- M5: controller identity, signed with its long-term key

@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-04d"
+local BUILD = "2026-11-05a"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -403,7 +403,8 @@ local function pair(driver, dev)
     log.info(TAG .. " pairing with thermostat (takes 1 to 3 minutes on the hub)...")
     local t0 = now()
     local s = hap.session(sock, { host = "lyric" })
-    local p, perr = s:pair_setup(pin, uuid4(), { yield = function() cosock.socket.sleep(0) end })
+    local p, perr = s:pair_setup(pin, uuid4(), { yield = function() cosock.socket.sleep(0) end,
+      progress = function(m) log.info(string.format("%s pairing: %s (%.0f s)", TAG, m, now() - t0)) end })
     sock:close()
     c.pairing = false
     if not p then

@@ -1,0 +1,53 @@
+name: honeywell-t6
+components:
+  - id: main
+    capabilities:
+      - id: temperatureMeasurement
+        version: 1
+      - id: thermostatHeatingSetpoint
+        version: 1
+      - id: thermostatMode
+        version: 1
+      - id: thermostatOperatingState
+        version: 1
+      - id: silvervalley08660.connectionStatus
+        version: 1
+      - id: silvervalley08660.connectionLog
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: Thermostat
+preferences:
+  - name: homekitCode
+    title: HomeKit code
+    description: 8 digits on the wall plate or in the quick start guide (e.g. 123-45-678). Needed once for pairing.
+    required: false
+    preferenceType: string
+    definition:
+      stringType: text
+      default: ""
+  - name: ipAddress
+    title: Thermostat IP (optional)
+    description: Leave on "auto" (found via mDNS). Only set when discovery fails.
+    required: false
+    preferenceType: string
+    definition:
+      stringType: text
+      default: "auto"
+  - name: hapPort
+    title: HomeKit port (optional)
+    description: 0 = auto (mDNS). Needed together with a fixed IP.
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 65535
+      default: 0
+  - name: resetPairing
+    title: Remove pairing
+    description: Switch on to unpair the hub from the thermostat (e.g. before re-pairing).
+    required: false
+    preferenceType: boolean
+    definition:
+      default: false

@@ -1,0 +1,7 @@
+name: "Honeywell T6 (HomeKit local)"
+packageKey: "honeywell-t6-homekit-local"
+description: "Local control of the Honeywell (Resideo) Lyric T6 / T6R thermostat over HomeKit, directly from the hub"
+vendorSupportInformation: "https://github.com/Stoeckie"
+permissions:
+  lan: {}
+  discovery: {}

@@ -1,0 +1,7 @@
+Honeywell T6 (HomeKit local) - SmartThings Edge driver
+Copyright 2026 Stoeckie
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+HomeKit controller (hap_client, SRP, curve25519, chacha20poly1305, sha512, tlv8) shared with
+smartthings-velux-active-local. Honeywell, Lyric and Resideo are trademarks of their owners;
+this project is not affiliated with them.

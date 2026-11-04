@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-04a"
+local BUILD = "2026-11-04c"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -43,6 +43,7 @@ bignum.yield_hook = function() cosock.socket.sleep(0) end -- SRP modpow runs for
 
 local conns = {}        -- device.id -> connection state
 local discovered = {}   -- dni -> { ip, port, id, name }
+local M_TXT_LOGGED = false
 
 -- connection status ------------------------------------------------------------------------
 local function emit_conn(dev, v)
@@ -115,11 +116,23 @@ local function save_pairing(dev, p)
 end
 
 -- addressing / mDNS --------------------------------------------------------------------------
-local function parse_txt(list)
+-- TXT records: accept a list of "k=v" strings or a map {k = v}, under f.txt.text or f.txt itself
+local function parse_txt(txt)
   local t = {}
-  for _, e in ipairs(list or {}) do
-    local k, v = tostring(e):match("^([^=]+)=(.*)$")
-    if k then t[k:lower()] = v end
+  local function take(tbl)
+    if type(tbl) ~= "table" then return end
+    for k, v in pairs(tbl) do
+      if type(k) == "number" then
+        local kk, vv = tostring(v):match("^([^=]+)=(.*)$")
+        if kk then t[kk:lower()] = vv end
+      elseif type(k) == "string" and k ~= "text" then
+        t[k:lower()] = tostring(v)
+      end
+    end
+  end
+  if type(txt) == "table" then
+    take(txt.text)
+    take(txt)
   end
   return t
 end
@@ -138,10 +151,25 @@ local function mdns_scan()
     return {}
   end
   local named, thermostats = {}, {}
+  log.info(string.format("%s mDNS: %d HomeKit device(s) answered", TAG, #(res.found or {})))
+  for _, f in ipairs(res.found or {}) do
+    local okd, desc = pcall(function()
+      local t = parse_txt(f.txt)
+      return string.format("%s at %s:%s ci=%s md=%s sf=%s", tostring((f.service_info or {}).name),
+        tostring((f.host_info or {}).address), tostring((f.host_info or {}).port), tostring(t.ci), tostring(t.md),
+        tostring(t.sf))
+    end)
+    log.info(TAG .. "   " .. (okd and desc or ("unreadable entry: " .. tostring(desc))))
+    if f.txt ~= nil and not M_TXT_LOGGED then
+      M_TXT_LOGGED = true
+      local okj, enc = pcall(json.encode, f.txt)
+      log.info(TAG .. "   txt record looks like: " .. (okj and tostring(enc):sub(1, 300) or type(f.txt)))
+    end
+  end
   for _, f in ipairs(res.found or {}) do
     local host = f.host_info or {}
     local svc = f.service_info or {}
-    local txt = parse_txt(f.txt and f.txt.text)
+    local txt = parse_txt(f.txt)
     local name = tostring(svc.name or "")
     local hay = (name .. " " .. tostring(txt.md or "")):upper()
     local ip = host.address and tostring(host.address)

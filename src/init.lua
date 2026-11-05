@@ -529,8 +529,7 @@ local function ceil_half(x) return math.ceil(x * 2 - 1e-9) / 2 end
 -- Only active once a rule has sent setRoom: without it the driver never touches the setpoint.
 -- Back to idleSetpoint only on the change from "some rooms" to "no room", so a manual setpoint
 -- is left alone while no room asks for heat.
--- (the rule only sends setRoom when a room changes from asking to not asking or back, so a stored room
--- list from before an update also counts as active)
+-- (a stored room list also counts as active, so control resumes right after a driver update)
 local function apply_demand(dev)
   if not dev:get_field("demand_active") and dev:get_field(DEMAND_FIELD) == nil then return end
   local c = conns[dev.id]

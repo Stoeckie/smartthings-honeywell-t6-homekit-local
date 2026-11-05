@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05e"
+local BUILD = "2026-11-05f"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -529,8 +529,10 @@ local function ceil_half(x) return math.ceil(x * 2 - 1e-9) / 2 end
 -- Only active once a rule has sent setRoom: without it the driver never touches the setpoint.
 -- Back to idleSetpoint only on the change from "some rooms" to "no room", so a manual setpoint
 -- is left alone while no room asks for heat.
+-- (the rule only sends setRoom when a room changes from asking to not asking or back, so a stored room
+-- list from before an update also counts as active)
 local function apply_demand(dev)
-  if not dev:get_field("demand_active") then return end
+  if not dev:get_field("demand_active") and dev:get_field(DEMAND_FIELD) == nil then return end
   local c = conns[dev.id]
   if not (c and c.alive and c.model) then return end
   local v = c.model.values
@@ -594,7 +596,7 @@ end
 
 -- clearRooms: forget all rooms and switch heat demand control off until the next setRoom
 local function handle_clear_rooms(driver, dev)
-  dev:set_field(DEMAND_FIELD, {}, { persist = true })
+  dev:set_field(DEMAND_FIELD, nil, { persist = true })
   dev:set_field("demand_active", nil, { persist = true })
   dev:set_field("demand_last_n", 0, { persist = true })
   log.info(TAG .. " heat demand: all rooms cleared, control off until the next setRoom")

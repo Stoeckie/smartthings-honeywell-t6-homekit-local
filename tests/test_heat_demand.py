@@ -49,6 +49,10 @@ def test_rooms_add_and_remove():
     assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 21.5   # 20.5 + 2 x 0.5
     assert room(b"Keuken", b"off") == 21.0
     assert room(b"Noi", b"off") == 19                # nobody asks: idle setpoint
+    g.SET(b"tgt_temp", 21)                           # manual change while no room asks: left alone
+    g.SET(b"cur_temp", 19.0)
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 21
     events = [e[b"path"] for e in g.DEV[b"events"].values()]
     assert any(p.endswith(b"heatDemand.rooms") for p in events), events
 
@@ -57,3 +61,11 @@ def test_thermostat_off_untouched():
     g.SET(b"tgt_state", 0)
     assert g.ROOM(b"Keuken", b"on") == 19.5
     assert len(g.WRITES) == 0
+
+def test_inactive_without_rule():
+    """Users without a heat demand rule: the driver never changes the setpoint."""
+    lua, g = setup()
+    g.SET(b"tgt_temp", 22)
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert len(g.WRITES) == 0
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 22

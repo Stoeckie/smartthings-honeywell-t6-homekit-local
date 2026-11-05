@@ -50,18 +50,28 @@ Give the thermostat a DHCP reservation in your router; the driver also follows a
 
 ## Heat demand per room (zone control)
 
-Useful when the T6 is the only thermostat that talks to the boiler (e.g. OpenTherm) and other rooms have their own radiator or floor heating thermostats in SmartThings.
+Optional, for setups where the T6 is the only thermostat that talks to the boiler (e.g. OpenTherm) and the rooms have their own radiator or floor heating thermostats in SmartThings. **Without a heat demand rule nothing changes**: the driver only starts doing this after it has received its first `setRoom` command.
 
-The device has a capability **Heat Demand** with the command `setRoom(room, "on"/"off")`. Make a rule that sends, per room, `on` when its temperature is below its setpoint and `off` otherwise. With N rooms asking for heat the driver sets the T6 to its own temperature rounded up to 0.5 °C plus 0.5 °C per room (setting "Extra degrees per room"), and keeps following the T6 temperature. When no room asks any more, the setpoint goes back to "Setpoint without heat demand" (default 19 °C). The device shows which rooms ask for heat; `clearRooms` resets the list. When the T6 mode is off the driver leaves it alone.
+How it works: a rule tells the T6 per room whether that room asks for heat (temperature below its own setpoint). With N rooms asking, the driver sets the T6 to its own temperature rounded up to 0.5 °C plus 0.5 °C per room, and keeps following the T6 temperature. When the last room stops asking, the setpoint goes back to "Setpoint without heat demand" (default 19 °C); after that a manual setpoint is left alone. The device shows which rooms ask for heat. When the T6 mode is off the driver leaves it alone.
 
-Example rule action per room (Rules API):
+**Choosing the rooms.** The SmartThings app cannot compare a temperature with a setpoint, so this needs a rule (Rules API). The script `tools/heat-demand-rule.ps1` makes it for you on Windows, with the [SmartThings CLI](https://github.com/SmartThingsCommunity/smartthings-cli) logged in:
+
+```
+powershell -ExecutionPolicy Bypass -File heat-demand-rule.ps1
+```
+
+It lists every device in the T6's location that has a temperature and a heating setpoint (radiator valves, floor heating thermostats), you type the numbers of the rooms that count, and it creates or updates the rule "Heat demand (Honeywell T6)". Run it again to change the rooms. Options: `-RoomIds "<id>,<id>"` (no questions), `-RuleName "..."`, `-DryRun` (only writes the JSON), `-Cli "C:\Program Files\SmartThings\smartthings.exe"`.
+
+To stop: delete the rule (`smartthings rules:delete <ruleId>`) and send `clearRooms` to the T6 (or just delete the rule; with no room asking the setpoint returns to the idle value once and is then left alone).
+
+The rule per room looks like this:
 
 ```json
 {"if": {"lessThan": {
    "left":  {"device": {"devices": ["<room>"], "component": "main", "capability": "temperatureMeasurement", "attribute": "temperature", "trigger": "Always"}},
-   "right": {"device": {"devices": ["<room>"], "component": "main", "capability": "thermostatHeatingSetpoint", "attribute": "heatingSetpoint", "trigger": "Always"}}}},
+   "right": {"device": {"devices": ["<room>"], "component": "main", "capability": "thermostatHeatingSetpoint", "attribute": "heatingSetpoint", "trigger": "Always"}}},
  "then": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "on"}]}]}}],
- "else": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "off"}]}]}}]}
+ "else": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "off"}]}]}}]}}
 ```
 
 ## Offline notification

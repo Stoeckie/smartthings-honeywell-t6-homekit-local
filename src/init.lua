@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05d"
+local BUILD = "2026-11-05e"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -526,7 +526,11 @@ end
 
 local function ceil_half(x) return math.ceil(x * 2 - 1e-9) / 2 end
 
+-- Only active once a rule has sent setRoom: without it the driver never touches the setpoint.
+-- Back to idleSetpoint only on the change from "some rooms" to "no room", so a manual setpoint
+-- is left alone while no room asks for heat.
 local function apply_demand(dev)
+  if not dev:get_field("demand_active") then return end
   local c = conns[dev.id]
   if not (c and c.alive and c.model) then return end
   local v = c.model.values
@@ -537,14 +541,16 @@ local function apply_demand(dev)
   local idle = tonumber(p.idleSetpoint) or 19
   local step = tonumber(p.stepPerRoom) or 0.5
   local cur_sp = tonumber(v.tgt_temp)
+  local last_n = tonumber(dev:get_field("demand_last_n")) or 0
   local target
   if n > 0 then
     local t = tonumber(v.cur_temp)
     if not t then return end
     target = model_lib.clamp_setpoint(c.model, ceil_half(t) + step * n)
-  elseif cur_sp and cur_sp > idle then
+  elseif last_n > 0 and cur_sp and cur_sp > idle then
     target = model_lib.clamp_setpoint(c.model, idle)
   end
+  if n ~= last_n then dev:set_field("demand_last_n", n, { persist = true }) end
   if target and (not cur_sp or math.abs(target - cur_sp) > 0.01) then
     log.info(string.format("%s heat demand: %d room(s), temperature %s, setpoint %s -> %s", TAG, n,
       tostring(v.cur_temp), tostring(cur_sp), tostring(target)))
@@ -571,6 +577,10 @@ local function handle_set_room(driver, dev, cmd)
   local room = tostring(cmd.args.room or ""):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 40)
   if room == "" then return end
   local on = cmd.args.demand == "on" or cmd.args.demand == true
+  if not dev:get_field("demand_active") then
+    dev:set_field("demand_active", true, { persist = true })
+    log.info(TAG .. " heat demand control active (setRoom received)")
+  end
   local rooms = demand_rooms(dev)
   if (rooms[room] == true) ~= on then
     rooms[room] = on or nil
@@ -582,9 +592,12 @@ local function handle_set_room(driver, dev, cmd)
   apply_demand_soon(dev)
 end
 
+-- clearRooms: forget all rooms and switch heat demand control off until the next setRoom
 local function handle_clear_rooms(driver, dev)
   dev:set_field(DEMAND_FIELD, {}, { persist = true })
-  log.info(TAG .. " heat demand: all rooms cleared")
+  dev:set_field("demand_active", nil, { persist = true })
+  dev:set_field("demand_last_n", 0, { persist = true })
+  log.info(TAG .. " heat demand: all rooms cleared, control off until the next setRoom")
   emit_demand(dev)
   apply_demand_soon(dev)
 end

@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05h"
+local BUILD = "2026-11-05i"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -560,6 +560,10 @@ local function apply_demand(dev)
     local t = tonumber(v.cur_temp)
     if not t then return end
     target = model_lib.clamp_setpoint(c.model, ceil_half(t) + step * n)
+    -- The T6 reports its temperature in 0.5 steps and often flips between two of them every
+    -- 20 s. Follow it upwards, but only go down when fewer rooms ask for heat; otherwise the
+    -- setpoint would flip along with it.
+    if cur_sp and target < cur_sp and n >= last_n then target = nil end
   elseif last_n > 0 and cur_sp and cur_sp > idle then
     target = model_lib.clamp_setpoint(c.model, idle)
   end

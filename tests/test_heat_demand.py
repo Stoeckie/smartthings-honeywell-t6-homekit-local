@@ -73,8 +73,19 @@ def test_inactive_without_rule():
 def test_active_from_stored_rooms():
     """After a driver update the rule sends nothing until a room changes: stored rooms keep it active."""
     lua, g = setup()
-    lua.execute(b'DEV.fields.heat_rooms = { Keuken = true }')
-    g.SET(b"cur_temp", 19.5)
-    g.SET(b"tgt_temp", 20.5)
+    lua.execute(b'DEV.fields.heat_rooms = { Keuken = true }; DEV.fields.demand_last_n = 1')
+    g.SET(b"cur_temp", 20.5)
+    g.SET(b"tgt_temp", 20.0)
     lua.execute(b'DRIVER._t6.apply_demand(DEV)')
-    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 20.0
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 21.0
+
+def test_temperature_flicker_does_not_flip_setpoint():
+    lua, g = setup()
+    g.SET(b"cur_temp", 21.0)
+    assert g.ROOM(b"Keuken", b"on") == 21.5
+    g.SET(b"cur_temp", 20.5)                       # T6 flips down half a degree
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 21.5
+    g.SET(b"cur_temp", 21.5)                       # and up again: follow upwards
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 22.0

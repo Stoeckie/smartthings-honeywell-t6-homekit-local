@@ -126,21 +126,31 @@ function Session:_recv_raw(n)
   return data
 end
 
--- read exactly n raw bytes
-function Session:_read_exact(n)
-  local parts, have = {}, 0
+-- read exactly n raw bytes. With a socket timeout set: a timeout before the first byte is returned as
+-- "timeout" when idle_ok (the caller can check its own state and read again, nothing is lost); a timeout
+-- in the middle keeps waiting a few times, so a slow frame is not cut in half.
+local MID_FRAME_TIMEOUTS = 4
+function Session:_read_exact(n, idle_ok)
+  local parts, have, waits = {}, 0, 0
   while have < n do
     local d, err = self:_recv_raw(n - have)
-    if not d then return nil, err end
-    parts[#parts + 1] = d
-    have = have + #d
+    if not d then
+      if err == "timeout" and have > 0 and waits < MID_FRAME_TIMEOUTS then
+        waits = waits + 1
+      else
+        return nil, err
+      end
+    else
+      parts[#parts + 1] = d
+      have = have + #d
+    end
   end
   return table.concat(parts)
 end
 
 -- read and decrypt one frame, append to self.plain
 function Session:_read_frame()
-  local hdr, err = self:_read_exact(2)
+  local hdr, err = self:_read_exact(2, true)
   if not hdr then return nil, err end
   local len = string.unpack("<I2", hdr)
   local ct, err2 = self:_read_exact(len + 16)

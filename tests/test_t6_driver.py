@@ -133,7 +133,11 @@ class PySock:
         try:
             d = self.s.recv(int(n))
         except socket.timeout:
+            self.timeouts = getattr(self, "timeouts", 0) + 1
+            if self.timeouts > 3:  # the reader loop now waits on idle timeouts: end the test session
+                raise RuntimeError("STOP idle")
             return None, b"timeout"
+        self.timeouts = 0
         if not d:
             return None, b"closed"
         return d

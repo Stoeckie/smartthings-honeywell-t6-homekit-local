@@ -74,9 +74,9 @@ The rule per room looks like this:
  "else": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "off"}]}]}}]}}
 ```
 
-## Offline notification
+## Offline and online notification
 
-SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after 2 minutes without a connection; every drop is shown afterwards as **Last drop** (time UTC, duration, reason).
+SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after 2 minutes without a connection; every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
 
 ## Troubleshooting
 

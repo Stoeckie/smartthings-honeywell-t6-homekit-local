@@ -6,6 +6,8 @@ Why: the cloud integration (Honeywell Home / Resideo) runs on Resideo's older Ly
 
 The complete HomeKit controller (pair setup with SRP-6a, Ed25519, X25519, ChaCha20-Poly1305, TLV8, encrypted sessions and events) is written in pure Lua and runs on the hub. It is the same controller as in [VELUX ACTIVE (HomeKit local)](https://github.com/Stoeckie/smartthings-velux-active-local).
 
+Forum topic: https://community.smartthings.com/t/311952
+
 ## What you get
 
 * **Temperature** (the thermostat's own sensor)

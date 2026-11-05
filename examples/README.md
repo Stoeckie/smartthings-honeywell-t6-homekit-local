@@ -7,7 +7,7 @@ The logic, per room thermostat:
 * **if** its temperature is below its own heating setpoint **then** send `setRoom("<name>", "on")` to the T6
 * **else** send `setRoom("<name>", "off")`
 
-`"trigger": "Always"` on both sides makes the rule run on every temperature or setpoint change of that room. SmartThings only runs the `then` or `else` part when the result changes, so the T6 gets a message when a room starts or stops asking for heat; the driver remembers the list.
+`"trigger": "Always"` on both sides makes the rule run on every temperature or setpoint change of that room. A plain `lessThan` condition is evaluated on every event, so the T6 gets `on` or `off` for that room each time (see the [Rules API documentation](https://developer.smartthings.com/docs/automations/rules); wrapping it in `changes` would only fire on the transition). The driver ignores repeats and remembers the list.
 
 The driver then sets the T6 to its own temperature rounded up to 0.5 °C plus 0.5 °C per room asking (setting "Extra degrees per room"), and back to "Setpoint without heat demand" (19 °C) when no room asks any more.
 

@@ -95,7 +95,7 @@ local function new_device(info)
               device_network_id = info.device_network_id, parent_device_id = info.parent_device_id,
               parent_assigned_child_key = info.parent_assigned_child_key, label = info.label,
               profile = info.profile, events = {}, state = "online" }
-  function d:get_field(k) return self.fields[k] end
+  function d:get_field(k) local v = self.fields[k]; if v == nil then return end; return v end -- like the hub: nothing, not nil
   function d:set_field(k, v) self.fields[k] = v end
   function d:emit_event(e) self.events[#self.events + 1] = e end
   function d:online() self.state = "online" end

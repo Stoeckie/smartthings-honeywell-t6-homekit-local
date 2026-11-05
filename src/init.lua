@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05f"
+local BUILD = "2026-11-05g"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -543,7 +543,7 @@ local function apply_demand(dev)
   local idle = tonumber(p.idleSetpoint) or 19
   local step = tonumber(p.stepPerRoom) or 0.5
   local cur_sp = tonumber(v.tgt_temp)
-  local last_n = tonumber(dev:get_field("demand_last_n")) or 0
+  local last_n = tonumber((dev:get_field("demand_last_n"))) or 0 -- get_field may return nothing at all
   local target
   if n > 0 then
     local t = tonumber(v.cur_temp)
@@ -560,6 +560,12 @@ local function apply_demand(dev)
   end
 end
 
+-- never let a heat demand error take the whole driver down
+local function safe_apply_demand(dev)
+  local ok, err = pcall(apply_demand, dev)
+  if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
+end
+
 -- the rule sends one command per room in a burst: settle for 2 s, then apply once
 apply_demand_soon = function(dev)
   local c = conns[dev.id]
@@ -569,10 +575,10 @@ apply_demand_soon = function(dev)
   local ok = pcall(function()
     dev.thread:call_with_delay(2, function()
       local c2 = conns[dev.id]
-      if c2 and c2.demand_token == token then cosock.spawn(function() apply_demand(dev) end, "t6-demand") end
+      if c2 and c2.demand_token == token then cosock.spawn(function() safe_apply_demand(dev) end, "t6-demand") end
     end)
   end)
-  if not ok then cosock.spawn(function() apply_demand(dev) end, "t6-demand") end
+  if not ok then cosock.spawn(function() safe_apply_demand(dev) end, "t6-demand") end
 end
 
 local function handle_set_room(driver, dev, cmd)

@@ -14,6 +14,8 @@ components:
         version: 1
       - id: silvervalley08660.connectionLog
         version: 1
+      - id: silvervalley08660.heatDemand
+        version: 1
       - id: refresh
         version: 1
     categories:
@@ -51,3 +53,21 @@ preferences:
     preferenceType: boolean
     definition:
       default: false
+  - name: idleSetpoint
+    title: Setpoint without heat demand
+    description: "Used by the heat demand function (command setRoom from a rule): when no room asks for heat, the setpoint goes back to this value."
+    required: false
+    preferenceType: number
+    definition:
+      minimum: 5
+      maximum: 30
+      default: 19
+  - name: stepPerRoom
+    title: Extra degrees per room asking heat
+    description: "With N rooms asking for heat the setpoint becomes the thermostat temperature (rounded up to 0.5) plus N times this value."
+    required: false
+    preferenceType: number
+    definition:
+      minimum: 0
+      maximum: 3
+      default: 0.5

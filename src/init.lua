@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05c"
+local BUILD = "2026-11-05d"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300
@@ -24,6 +24,14 @@ local TAG = "[t6]"
 local conn_cap = capabilities["silvervalley08660.connectionStatus"]
 local drop_cap = capabilities["silvervalley08660.connectionLog"]
 local CONN_GRACE = 120
+
+-- Heat demand: a routine/rule tells the thermostat per room whether that room asks for heat
+-- (command setRoom(room, "on"/"off")). With N rooms asking, the setpoint becomes the thermostat's own
+-- temperature rounded up to 0.5 plus stepPerRoom x N, so the boiler is asked for more heat the more
+-- rooms need it. With no room asking, the setpoint goes back to idleSetpoint.
+local demand_cap = capabilities["silvervalley08660.heatDemand"]
+local DEMAND_FIELD = "heat_rooms"
+local apply_demand_soon -- defined after the session code
 
 local tempMeas = capabilities.temperatureMeasurement
 local heatSp = capabilities.thermostatHeatingSetpoint
@@ -328,11 +336,13 @@ local function run_session(driver, dev)
         emit_static(dev, model)
         safe_emit(dev, model, nil)
         log.info(TAG .. " session up")
+        apply_demand_soon(dev)
         backoff = RECONNECT_MIN
         sock:settimeout(nil) -- reader loop owns the socket from now on
         s.on_event = function(chars)
           local touched = model_lib.apply(model, chars)
           if touched then safe_emit(dev, model, touched) end
+          if touched and (touched.cur_temp or touched.tgt_state) then apply_demand_soon(dev) end
         end
         s.wait_response = make_waiter(c)
         while c.alive do
@@ -490,6 +500,95 @@ end
 
 local function handle_mode(driver, dev, cmd) set_mode(dev, cmd.args.mode) end
 
+-- heat demand -----------------------------------------------------------------------------------------
+local function demand_rooms(dev)
+  local r = dev:get_field(DEMAND_FIELD)
+  return type(r) == "table" and r or {}
+end
+
+local function demand_list(rooms)
+  local names = {}
+  for k, v in pairs(rooms) do if v then names[#names + 1] = tostring(k) end end
+  table.sort(names)
+  return names
+end
+
+local function emit_demand(dev)
+  local names = demand_list(demand_rooms(dev))
+  local summary = #names == 0 and "none" or table.concat(names, ", ")
+  if dev:get_field("demand_emitted") == summary then return end
+  local ok = pcall(function()
+    dev:emit_event(demand_cap.rooms(#names))
+    dev:emit_event(demand_cap.summary(summary:sub(1, 200)))
+  end)
+  if ok then dev:set_field("demand_emitted", summary) end
+end
+
+local function ceil_half(x) return math.ceil(x * 2 - 1e-9) / 2 end
+
+local function apply_demand(dev)
+  local c = conns[dev.id]
+  if not (c and c.alive and c.model) then return end
+  local v = c.model.values
+  local mode = tonumber(v.tgt_state)
+  if mode ~= 1 and mode ~= 3 then return end -- thermostat off: leave it alone
+  local n = #demand_list(demand_rooms(dev))
+  local p = dev.preferences or {}
+  local idle = tonumber(p.idleSetpoint) or 19
+  local step = tonumber(p.stepPerRoom) or 0.5
+  local cur_sp = tonumber(v.tgt_temp)
+  local target
+  if n > 0 then
+    local t = tonumber(v.cur_temp)
+    if not t then return end
+    target = model_lib.clamp_setpoint(c.model, ceil_half(t) + step * n)
+  elseif cur_sp and cur_sp > idle then
+    target = model_lib.clamp_setpoint(c.model, idle)
+  end
+  if target and (not cur_sp or math.abs(target - cur_sp) > 0.01) then
+    log.info(string.format("%s heat demand: %d room(s), temperature %s, setpoint %s -> %s", TAG, n,
+      tostring(v.cur_temp), tostring(cur_sp), tostring(target)))
+    write(dev, "tgt_temp", target, "heat demand setpoint " .. tostring(target))
+  end
+end
+
+-- the rule sends one command per room in a burst: settle for 2 s, then apply once
+apply_demand_soon = function(dev)
+  local c = conns[dev.id]
+  if not c then return end
+  c.demand_token = (c.demand_token or 0) + 1
+  local token = c.demand_token
+  local ok = pcall(function()
+    dev.thread:call_with_delay(2, function()
+      local c2 = conns[dev.id]
+      if c2 and c2.demand_token == token then cosock.spawn(function() apply_demand(dev) end, "t6-demand") end
+    end)
+  end)
+  if not ok then cosock.spawn(function() apply_demand(dev) end, "t6-demand") end
+end
+
+local function handle_set_room(driver, dev, cmd)
+  local room = tostring(cmd.args.room or ""):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 40)
+  if room == "" then return end
+  local on = cmd.args.demand == "on" or cmd.args.demand == true
+  local rooms = demand_rooms(dev)
+  if (rooms[room] == true) ~= on then
+    rooms[room] = on or nil
+    dev:set_field(DEMAND_FIELD, rooms, { persist = true })
+    log.info(string.format("%s heat demand: %s %s (%d room(s) asking)", TAG, room, on and "on" or "off",
+      #demand_list(rooms)))
+  end
+  emit_demand(dev)
+  apply_demand_soon(dev)
+end
+
+local function handle_clear_rooms(driver, dev)
+  dev:set_field(DEMAND_FIELD, {}, { persist = true })
+  log.info(TAG .. " heat demand: all rooms cleared")
+  emit_demand(dev)
+  apply_demand_soon(dev)
+end
+
 local function poll(driver, dev)
   local c = conns[dev.id]
   if not (c and c.alive and c.model) then return end
@@ -511,6 +610,7 @@ local function device_init(driver, dev)
   dev.thread:call_on_schedule(POLL_SECS, function()
     cosock.spawn(function() poll(driver, dev) end, "t6-poll")
   end, "t6-poll")
+  pcall(emit_demand, dev)
   if load_pairing(dev) then start_session(driver, dev) else pair(driver, dev) end
 end
 
@@ -531,6 +631,7 @@ local function info_changed(driver, dev, event, args)
     unpair(driver, dev)
     return
   end
+  if old.idleSetpoint ~= new.idleSetpoint or old.stepPerRoom ~= new.stepPerRoom then apply_demand_soon(dev) end
   if old.ipAddress ~= new.ipAddress or old.hapPort ~= new.hapPort then
     if load_pairing(dev) then start_session(driver, dev) end
   end
@@ -587,9 +688,11 @@ end
 
 local driver = Driver("honeywell-t6-homekit-local", {
   discovery = discovery,
+  _t6 = { conns = conns, apply_demand = function(dev) return apply_demand(dev) end }, -- for tests
   lifecycle_handlers = { init = device_init, added = device_added, infoChanged = info_changed,
                          removed = device_removed },
   capability_handlers = {
+    [demand_cap.ID] = { setRoom = handle_set_room, clearRooms = handle_clear_rooms },
     [capabilities.refresh.ID] = { [capabilities.refresh.commands.refresh.NAME] = handle_refresh },
     [heatSp.ID] = { [heatSp.commands.setHeatingSetpoint.NAME] = handle_setpoint },
     [tMode.ID] = {

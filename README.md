@@ -17,6 +17,7 @@ Forum topic: https://community.smartthings.com/t/311952
 * Live updates: the thermostat pushes every change, plus a safety poll every 5 minutes
 * **Connection** status (Connected or Offline) and **Last drop**, for offline notifications in routines
 * Automatic reconnect
+* **Heat demand per room** (optional): a rule tells the thermostat which rooms ask for heat; the setpoint follows the number of rooms (see below)
 
 ## Requirements
 
@@ -41,9 +42,27 @@ The Resideo app and the cloud integration keep working next to this driver; you 
 | HomeKit code | the 8 digits the thermostat shows while pairing, needed once |
 | Thermostat IP | `auto` (mDNS) or a fixed IP |
 | HomeKit port | `0` = auto (mDNS); set it together with a fixed IP |
+| Setpoint without heat demand | heat demand: setpoint when no room asks for heat (default 19) |
+| Extra degrees per room | heat demand: added per room asking for heat (default 0.5) |
 | Remove pairing | Unpairs the hub from the thermostat, e.g. before re-pairing |
 
 Give the thermostat a DHCP reservation in your router; the driver also follows a new IP via mDNS.
+
+## Heat demand per room (zone control)
+
+Useful when the T6 is the only thermostat that talks to the boiler (e.g. OpenTherm) and other rooms have their own radiator or floor heating thermostats in SmartThings.
+
+The device has a capability **Heat Demand** with the command `setRoom(room, "on"/"off")`. Make a rule that sends, per room, `on` when its temperature is below its setpoint and `off` otherwise. With N rooms asking for heat the driver sets the T6 to its own temperature rounded up to 0.5 °C plus 0.5 °C per room (setting "Extra degrees per room"), and keeps following the T6 temperature. When no room asks any more, the setpoint goes back to "Setpoint without heat demand" (default 19 °C). The device shows which rooms ask for heat; `clearRooms` resets the list. When the T6 mode is off the driver leaves it alone.
+
+Example rule action per room (Rules API):
+
+```json
+{"if": {"lessThan": {
+   "left":  {"device": {"devices": ["<room>"], "component": "main", "capability": "temperatureMeasurement", "attribute": "temperature", "trigger": "Always"}},
+   "right": {"device": {"devices": ["<room>"], "component": "main", "capability": "thermostatHeatingSetpoint", "attribute": "heatingSetpoint", "trigger": "Always"}}}},
+ "then": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "on"}]}]}}],
+ "else": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "off"}]}]}}]}
+```
 
 ## Offline notification
 

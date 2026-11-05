@@ -1,0 +1,461 @@
+{
+ "name": "Heat demand (Honeywell T6)",
+ "actions": [
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<kitchen-floor-heating-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<kitchen-floor-heating-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Kitchen"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Kitchen"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<living-room-floor-heating-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<living-room-floor-heating-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Living room"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Living room"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<bedroom-1-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<bedroom-1-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 1"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 1"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<bedroom-2-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<bedroom-2-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 2"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 2"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<bedroom-3-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<bedroom-3-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 3"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 3"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "if": {
+    "lessThan": {
+     "left": {
+      "device": {
+       "devices": [
+        "<bedroom-4-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "temperatureMeasurement",
+       "attribute": "temperature",
+       "trigger": "Always"
+      }
+     },
+     "right": {
+      "device": {
+       "devices": [
+        "<bedroom-4-radiator-valve-device-id>"
+       ],
+       "component": "main",
+       "capability": "thermostatHeatingSetpoint",
+       "attribute": "heatingSetpoint",
+       "trigger": "Always"
+      }
+     }
+    },
+    "then": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 4"
+          },
+          {
+           "string": "on"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    "else": [
+     {
+      "command": {
+       "devices": [
+        "<honeywell-t6-device-id>"
+       ],
+       "commands": [
+        {
+         "component": "main",
+         "capability": "silvervalley08660.heatDemand",
+         "command": "setRoom",
+         "arguments": [
+          {
+           "string": "Bedroom 4"
+          },
+          {
+           "string": "off"
+          }
+         ]
+        }
+       ]
+      }
+     }
+    ]
+   }
+  }
+ ]
+}

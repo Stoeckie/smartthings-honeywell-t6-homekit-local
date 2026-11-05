@@ -64,7 +64,7 @@ It lists every device in the T6's location that has a temperature and a heating 
 
 To stop: delete the rule (`smartthings rules:delete <ruleId>`) and send `clearRooms` to the T6 (or just delete the rule; with no room asking the setpoint returns to the idle value once and is then left alone).
 
-The rule per room looks like this:
+A complete example of the rule (my own setup with placeholder IDs) and the logic step by step: [examples/](examples/). The rule per room looks like this:
 
 ```json
 {"if": {"lessThan": {

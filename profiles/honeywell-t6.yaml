@@ -21,7 +21,7 @@ components:
 preferences:
   - name: homekitCode
     title: HomeKit code
-    description: 8 digits on the wall plate or in the quick start guide (e.g. 123-45-678). Needed once for pairing.
+    description: "While pairing the thermostat shows an 8-digit code on its display (not the sticker): type it here within 5 minutes."
     required: false
     preferenceType: string
     definition:

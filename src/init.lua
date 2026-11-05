@@ -1,6 +1,6 @@
 -- SmartThings Edge driver: Honeywell (Resideo) Lyric T6 / T6R thermostat over HomeKit, locally from the hub.
--- The hub pairs with the thermostat as a HomeKit controller (HomeKit code from the wall plate or the
--- quick start guide, entered as a device setting), keeps one encrypted HAP session open and receives
+-- The hub pairs with the thermostat as a HomeKit controller (the T6 shows a one-time code on its display
+-- once pairing has started; the user types it as a device setting), keeps one encrypted HAP session open and receives
 -- temperature, setpoint, mode and heating state events. No Resideo cloud, no Apple device.
 -- No secrets live in the code: the HomeKit code is a device preference, the pairing keys are stored
 -- on the hub as persistent device fields.
@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05b"
+local BUILD = "2026-11-05c"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 local RECONNECT_MIN, RECONNECT_MAX = 10, 300

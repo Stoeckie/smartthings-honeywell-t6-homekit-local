@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-06a"
+local BUILD = "2026-11-06b"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -213,20 +213,26 @@ local function address(dev)
   return ip, port
 end
 
+-- Which mDNS answer belongs to this device: same HomeKit id; else (id unknown, or the thermostat got a
+-- new id after a HomeKit reset) the one at the device's current IP; else, with no id known, the only one.
+local function pick_answer(dev, found)
+  local id, ip = dev:get_field("hap_id"), dev:get_field("ip")
+  for _, f in ipairs(found) do if id and f.id == id then return f end end
+  for _, f in ipairs(found) do if ip and f.ip == ip then return f end end
+  if not id and not ip and #found == 1 then return found[1] end
+  return nil
+end
+
 local function refresh_address(dev)
-  local id = dev:get_field("hap_id")
-  for _, f in ipairs(mdns_scan()) do
-    if not id or f.id == id then
-      if dev:get_field("ip") ~= f.ip or dev:get_field("port") ~= f.port then
-        log.info(string.format("%s thermostat %s at %s:%s", TAG, f.id, f.ip, tostring(f.port)))
-      end
-      dev:set_field("ip", f.ip, { persist = true })
-      dev:set_field("port", f.port, { persist = true })
-      dev:set_field("hap_id", f.id, { persist = true })
-      return true
-    end
+  local f = pick_answer(dev, mdns_scan())
+  if not f then return false end
+  if dev:get_field("ip") ~= f.ip or dev:get_field("port") ~= f.port then
+    log.info(string.format("%s thermostat %s at %s:%s", TAG, f.id, f.ip, tostring(f.port)))
   end
-  return false
+  dev:set_field("ip", f.ip, { persist = true })
+  dev:set_field("port", f.port, { persist = true })
+  dev:set_field("hap_id", f.id, { persist = true })
+  return true
 end
 
 local function open_socket(dev, timeout)
@@ -704,13 +710,26 @@ local function discovery(driver, opts, should_continue)
   local found = mdns_scan()
   log.info(string.format("%s discovery: %d HomeKit thermostat(s)", TAG, #found))
   local existing = {}
-  for _, dev in ipairs(driver:get_devices()) do existing[dev.device_network_id] = dev end
+  local by_id, by_ip = {}, {}
+  for _, dev in ipairs(driver:get_devices()) do
+    existing[dev.device_network_id] = dev
+    local hid, hip = dev:get_field("hap_id"), dev:get_field("ip")
+    if hid then by_id[hid] = dev end
+    if hip then by_ip[hip] = dev end
+  end
   for _, f in ipairs(found) do
     local dni = "t6-hap-" .. f.id:gsub(":", ""):lower()
     discovered[dni] = f
-    if existing[dni] then
-      existing[dni]:set_field("ip", f.ip, { persist = true })
-      existing[dni]:set_field("port", f.port, { persist = true })
+    -- A thermostat that is already a device (same dni, same HomeKit id, or same IP: the HomeKit id
+    -- changes after a HomeKit reset) is updated, not added a second time.
+    local known = existing[dni] or by_id[f.id] or by_ip[f.ip]
+    if known then
+      known:set_field("ip", f.ip, { persist = true })
+      known:set_field("port", f.port, { persist = true })
+      if known:get_field("hap_id") ~= f.id then
+        log.info(string.format("%s %s now has HomeKit id %s", TAG, tostring(known.label), f.id))
+        known:set_field("hap_id", f.id, { persist = true })
+      end
     else
       log.info(string.format("%s new thermostat %s '%s' at %s:%d (%s)", TAG, f.id, f.name, f.ip, f.port,
         f.paired and "already paired with another controller" or "ready to pair"))

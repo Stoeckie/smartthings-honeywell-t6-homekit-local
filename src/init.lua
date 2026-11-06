@@ -13,10 +13,14 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-05i"
+local BUILD = "2026-11-06a"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
-local RECONNECT_MIN, RECONNECT_MAX = 10, 300
+-- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
+-- 5 minute poll grid, on both thermostats at the same second). It pushes every change anyway, so a
+-- poll is only sent when nothing at all came in for IDLE_POLL seconds (to find a dead connection).
+local IDLE_POLL = 900
+local RECONNECT_MIN, RECONNECT_MAX = 3, 300
 local READ_IDLE = 20 -- seconds the reader loop waits before checking whether the session is still wanted
 local TAG = "[t6]"
 
@@ -338,6 +342,7 @@ local function run_session(driver, dev)
         dev:online(); set_conn(dev, true)
         emit_static(dev, model)
         safe_emit(dev, model, nil)
+        c.last_rx = now()
         log.info(TAG .. " session up")
         apply_demand_soon(dev)
         backoff = RECONNECT_MIN
@@ -354,6 +359,7 @@ local function run_session(driver, dev)
         while c.alive do
           local msg, rerr = s:read_message()
           if msg then
+            c.last_rx = now()
             if msg.event then s:_dispatch_event(msg) else c.responses[#c.responses + 1] = msg end
           elseif rerr == "timeout" and c.alive then
             -- idle: nothing to read, the connection is still ours
@@ -625,9 +631,10 @@ local function handle_clear_rooms(driver, dev)
   apply_demand_soon(dev)
 end
 
-local function poll(driver, dev)
+local function poll(driver, dev, forced)
   local c = conns[dev.id]
   if not (c and c.alive and c.model) then return end
+  if not forced and c.last_rx and now() - c.last_rx < IDLE_POLL then return end
   local chars, err = c.session:get(model_lib.read_ids(c.model))
   if chars then
     local touched = model_lib.apply(c.model, chars)
@@ -638,7 +645,7 @@ local function poll(driver, dev)
 end
 
 local function handle_refresh(driver, dev)
-  cosock.spawn(function() poll(driver, dev) end, "t6-refresh")
+  cosock.spawn(function() poll(driver, dev, true) end, "t6-refresh")
 end
 
 -- lifecycle ----------------------------------------------------------------------------------------------

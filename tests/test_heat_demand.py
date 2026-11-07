@@ -89,3 +89,17 @@ def test_temperature_flicker_does_not_flip_setpoint():
     g.SET(b"cur_temp", 21.5)                       # and up again: follow upwards
     lua.execute(b'DRIVER._t6.apply_demand(DEV)')
     assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 22.0
+
+def test_failed_write_is_retried_after_reconnect():
+    """'No room asks' while the T6 closes its session: the write fails; after the reconnect the driver
+    must still go back to the idle setpoint (before, the boiler kept heating on the old setpoint)."""
+    lua, g = setup()
+    assert g.ROOM(b"Noi", b"on") == 20.0
+    lua.execute(b'''
+      local c = DRIVER._t6.conns["t6"]
+      FAILPUT = c.session.put
+      c.session.put = function(self, list) return nil, "closed" end''')
+    assert g.ROOM(b"Noi", b"off") == 20.0          # write failed: still 20
+    lua.execute(b'DRIVER._t6.conns["t6"].session.put = FAILPUT')
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')   # what the reconnect does
+    assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 19

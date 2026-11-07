@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-06b"
+local BUILD = "2026-11-07a"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -579,12 +579,16 @@ local function apply_demand(dev)
   elseif last_n > 0 and cur_sp and cur_sp > idle then
     target = model_lib.clamp_setpoint(c.model, idle)
   end
-  if n ~= last_n then dev:set_field("demand_last_n", n, { persist = true }) end
+  local done = true
   if target and (not cur_sp or math.abs(target - cur_sp) > 0.01) then
     log.info(string.format("%s heat demand: %d room(s), temperature %s, setpoint %s -> %s", TAG, n,
       tostring(v.cur_temp), tostring(cur_sp), tostring(target)))
-    write(dev, "tgt_temp", target, "heat demand setpoint " .. tostring(target))
+    done = write(dev, "tgt_temp", target, "heat demand setpoint " .. tostring(target))
   end
+  -- Remember the number of rooms only once the setpoint is written. If the write fails (the T6 closes
+  -- its HomeKit session every 20 min), the next try after the reconnect still sees the change; before,
+  -- "no room asks" was then lost and the boiler kept heating on the old setpoint.
+  if done and n ~= last_n then dev:set_field("demand_last_n", n, { persist = true }) end
 end
 
 -- never let a heat demand error take the whole driver down

@@ -21,6 +21,15 @@ components:
     categories:
       - name: Thermostat
 preferences:
+  - name: offlineAfter
+    title: Offline after (minutes)
+    description: "Connection only turns Offline after this many minutes without contact, so a short network outage (e.g. a router update at night) gives no notification."
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 1
+      maximum: 120
+      default: 5
   - name: homekitCode
     title: HomeKit code
     description: "While pairing the thermostat shows an 8-digit code on its display (not the sticker): type it here within 5 minutes."
@@ -55,16 +64,16 @@ preferences:
       default: false
   - name: idleSetpoint
     title: Setpoint without heat demand
-    description: "Used by the heat demand function (command setRoom from a rule): when no room asks for heat, the setpoint goes back to this value."
+    description: "In °C (a value above 40 is read as °F, e.g. 66). Used by the heat demand function (command setRoom from a rule): when no room asks for heat, the setpoint goes back to this value."
     required: false
     preferenceType: number
     definition:
       minimum: 5
-      maximum: 30
+      maximum: 86
       default: 19
   - name: stepPerRoom
     title: Extra degrees per room asking heat
-    description: "With N rooms asking for heat the setpoint becomes the thermostat temperature (rounded up to 0.5) plus N times this value."
+    description: "In °C (0.5 °C is about 1 °F). With N rooms asking for heat the setpoint becomes the thermostat temperature (rounded up to 0.5 °C) plus N times this value."
     required: false
     preferenceType: number
     definition:

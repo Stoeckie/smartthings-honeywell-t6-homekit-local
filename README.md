@@ -11,7 +11,7 @@ Forum topic: https://community.smartthings.com/t/311952
 ## What you get
 
 * **Temperature** (the thermostat's own sensor)
-* **Heating setpoint**: read and set, rounded to the thermostat's step (0.5 °C)
+* **Heating setpoint**: read and set, rounded to the thermostat's step (0.5 °C). With a SmartThings location in Fahrenheit the app shows °F; a setpoint sent in °F is converted to °C
 * **Mode**: off / heat / auto (whatever the thermostat reports as supported)
 * **Operating state**: heating or idle, i.e. whether the thermostat itself is calling for heat. Useful in routines ("only raise the setpoint when the thermostat is not heating yet").
 * Live updates: the thermostat pushes every change, plus a safety poll every 5 minutes
@@ -42,8 +42,8 @@ The Resideo app and the cloud integration keep working next to this driver; you 
 | HomeKit code | the 8 digits the thermostat shows while pairing, needed once |
 | Thermostat IP | `auto` (mDNS) or a fixed IP |
 | HomeKit port | `0` = auto (mDNS); set it together with a fixed IP |
-| Setpoint without heat demand | heat demand: setpoint when no room asks for heat (default 19) |
-| Extra degrees per room | heat demand: added per room asking for heat (default 0.5) |
+| Setpoint without heat demand | heat demand: setpoint in °C when no room asks for heat (default 19; a value above 40 is read as °F, e.g. 66) |
+| Extra degrees per room | heat demand: °C added per room asking for heat (default 0.5 °C, about 1 °F) |
 | Remove pairing | Unpairs the hub from the thermostat, e.g. before re-pairing |
 
 Give the thermostat a DHCP reservation in your router; the driver also follows a new IP via mDNS.
@@ -76,7 +76,7 @@ A complete example of the rule (my own setup with placeholder IDs) and the logic
 
 ## Offline and online notification
 
-SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after 2 minutes without a connection; every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
+SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after **Offline after (minutes)** without a connection (setting, default 5, so a router update at night gives no notification); every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
 
 ## Troubleshooting
 

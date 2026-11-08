@@ -13,7 +13,7 @@ local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
 
-local BUILD = "2026-11-08a"
+local BUILD = "2026-11-08b"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -28,12 +28,19 @@ local TAG = "[t6]"
 -- (SmartThings itself has no "device offline" trigger for routines). Offline only after CONN_GRACE s.
 local conn_cap = capabilities["silvervalley08660.connectionStatus"]
 local drop_cap = capabilities["silvervalley08660.connectionLog"]
-local CONN_GRACE = 120
+local CONN_GRACE = 300
+local function conn_grace(dev)
+  -- setting "Offline after (minutes)": a router or network update at night takes a few minutes
+  local m = tonumber(dev.preferences and dev.preferences.offlineAfter)
+  if m and m >= 1 then return math.floor(m * 60) end
+  return CONN_GRACE
+end
 
 -- Heat demand: a routine/rule tells the thermostat per room whether that room asks for heat
 -- (command setRoom(room, "on"/"off")). With N rooms asking, the setpoint becomes the thermostat's own
 -- temperature rounded up to 0.5 plus stepPerRoom x N, so the boiler is asked for more heat the more
 -- rooms need it. With no room asking, the setpoint goes back to idleSetpoint.
+-- Both preferences are in °C (HomeKit works in Celsius); an idleSetpoint above 40 is read as °F.
 local demand_cap = capabilities["silvervalley08660.heatDemand"]
 local DEMAND_FIELD = "heat_rooms"
 local apply_demand_soon -- defined after the session code
@@ -102,7 +109,7 @@ local function set_conn(dev, up, reason)
   local since = os.time()
   dev:set_field("conn_down_since", since)
   local ok = pcall(function()
-    dev.thread:call_with_delay(CONN_GRACE, function()
+    dev.thread:call_with_delay(conn_grace(dev), function()
       if dev:get_field("conn_down_since") == since then emit_conn(dev, "offline") end
     end)
   end)
@@ -514,7 +521,12 @@ end
 
 local function handle_setpoint(driver, dev, cmd)
   local c = conns[dev.id]
-  local v = c and c.model and model_lib.clamp_setpoint(c.model, cmd.args.setpoint) or tonumber(cmd.args.setpoint)
+  local raw = model_lib.to_celsius(cmd.args.setpoint) -- Fahrenheit location: the app sends °F
+  if raw == nil then return end
+  local v = model_lib.clamp_setpoint((c and c.model) or { meta = {} }, raw)
+  if tonumber(cmd.args.setpoint) ~= raw then
+    log.info(string.format("%s setpoint %s read as °F -> %s °C", TAG, tostring(cmd.args.setpoint), tostring(v)))
+  end
   cosock.spawn(function() write(dev, "tgt_temp", v, "setpoint " .. tostring(v)) end, "t6-setpoint")
 end
 
@@ -571,7 +583,7 @@ local function apply_demand(dev)
   if mode ~= 1 and mode ~= 3 then return end -- thermostat off: leave it alone
   local n = #demand_list(demand_rooms(dev))
   local p = dev.preferences or {}
-  local idle = tonumber(p.idleSetpoint) or 19
+  local idle = model_lib.to_celsius(p.idleSetpoint) or 19 -- °C; a value above 40 is read as °F
   local step = tonumber(p.stepPerRoom) or 0.5
   local cur_sp = tonumber(v.tgt_temp)
   local last_n = tonumber((dev:get_field("demand_last_n"))) or 0 -- get_field may return nothing at all

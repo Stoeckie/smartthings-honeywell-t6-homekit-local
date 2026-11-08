@@ -103,3 +103,41 @@ def test_failed_write_is_retried_after_reconnect():
     lua.execute(b'DRIVER._t6.conns["t6"].session.put = FAILPUT')
     lua.execute(b'DRIVER._t6.apply_demand(DEV)')   # what the reconnect does
     assert lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp') == 19
+
+
+# Fahrenheit locations ------------------------------------------------------------------------------
+SETPOINT = rb'''
+function SETPOINT_CMD(v)
+  for _, fn in pairs(DRIVER.capability_handlers["thermostatHeatingSetpoint"]) do
+    fn(DRIVER_OBJ, DEV, { args = { setpoint = v } })
+  end
+  return DRIVER._t6.conns["t6"].model.values.tgt_temp
+end
+'''
+
+def test_setpoint_command_celsius_and_fahrenheit():
+    """A location set to Fahrenheit sends the setpoint in °F: 68 must become 20 °C, not 68 (clamped to 30)."""
+    lua, g = setup()
+    lua.execute(SETPOINT)
+    assert g.SETPOINT_CMD(21.3) == 21.5            # °C, rounded to the 0.5 step
+    assert g.SETPOINT_CMD(68) == 20.0              # 68 °F
+    assert g.SETPOINT_CMD(70) == 21.0              # 21.1 °C -> 21.0
+    assert g.SETPOINT_CMD(40) == 30                # 40 is still °C (clamped to the device maximum)
+    assert list(g.WRITES.values()) == [21.5, 20.0, 21.0, 30]
+    sp = [e[b"arg"] for e in g.DEV[b"events"].values() if e[b"path"].endswith(b"heatingSetpoint")]
+    assert all(a[b"unit"] == b"C" for a in sp), sp
+
+def test_idle_setpoint_in_fahrenheit():
+    """idleSetpoint is °C; a value above 40 (a US user typing 66) is read as °F: 66 °F = 18.9 -> 19.0 °C."""
+    lua, g = setup()
+    lua.execute(b'DEV.preferences.idleSetpoint = 66')
+    assert g.ROOM(b"Keuken", b"on") == 20.0
+    assert g.ROOM(b"Keuken", b"off") == 19.0
+
+def test_to_celsius():
+    lua, g = setup()
+    m = lua.eval(b'require "t6_model"')
+    assert m.to_celsius(20) == 20
+    assert m.to_celsius(40) == 40
+    assert abs(m.to_celsius(68) - 20) < 1e-9
+    assert m.to_celsius(b"abc") is None

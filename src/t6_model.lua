@@ -112,6 +112,17 @@ function M.supported_modes(model)
   return out
 end
 
+-- HomeKit always works in Celsius. A SmartThings location set to Fahrenheit sends setpoints in °F
+-- (68 instead of 20); no sensible Celsius setpoint is above 40, so such a value is read as °F.
+M.MAX_CELSIUS = 40
+
+--- Setpoint in °C: values above MAX_CELSIUS are taken as °F and converted.
+function M.to_celsius(value)
+  local v = tonumber(value)
+  if v and v > M.MAX_CELSIUS then v = (v - 32) * 5 / 9 end
+  return v
+end
+
 --- Clamp and round a setpoint to the characteristic's range and step (default 5 to 35, step 0.5).
 function M.clamp_setpoint(model, value)
   local m = model.meta.tgt_temp or {}

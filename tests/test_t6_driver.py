@@ -189,3 +189,6 @@ def test_driver_end_to_end(accessory):
     assert any(p.endswith(b"thermostatOperatingState.thermostatOperatingState.heating") for p in paths), paths
     temp = [a for p, a in evs if p.endswith(b"temperatureMeasurement.temperature")][0]
     assert temp[b"value"] == 20.4
+    assert temp[b"unit"] == b"C"  # the app converts to °F only when the unit is given
+    rng = [a for p, a in evs if p.endswith(b"heatingSetpointRange")]
+    assert rng and rng[0][b"unit"] == b"C", rng

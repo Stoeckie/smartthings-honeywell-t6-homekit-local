@@ -78,6 +78,10 @@ A complete example of the rule (my own setup with placeholder IDs) and the logic
 
 SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after **Offline after (minutes)** without a connection (setting, default 5, so a router update at night gives no notification); every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
 
+## Events
+
+A value only goes to the hub when it changed. After a driver start every value is sent once so the app catches up on anything it missed. (Re-emitting unchanged values makes the hub drop events of a device, and the app then keeps a stale value.)
+
 ## Troubleshooting
 
 * **Not found by Scan nearby**: check that the thermostat is on Wi-Fi (Resideo app works) and in the same subnet as the hub. A device "Honeywell T6" is created anyway; set IP and port by hand.

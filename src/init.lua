@@ -12,8 +12,9 @@ local json = require "st.json"
 local hap = require "hap_client"
 local bignum = require "bignum"
 local model_lib = require "t6_model"
+local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-08b"
+local BUILD = "2026-11-09a"
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -273,34 +274,34 @@ local function emit_state(dev, model, touched)
   local all = touched == nil
   local function t(f) return all or touched[f] end
   if t("cur_temp") and tonumber(v.cur_temp) then
-    dev:emit_event(tempMeas.temperature({ value = math.floor(tonumber(v.cur_temp) * 10 + 0.5) / 10, unit = "C" }))
+    emitq.emit(dev, tempMeas.temperature({ value = math.floor(tonumber(v.cur_temp) * 10 + 0.5) / 10, unit = "C" }))
   end
   if t("tgt_temp") and tonumber(v.tgt_temp) then
-    dev:emit_event(heatSp.heatingSetpoint({ value = math.floor(tonumber(v.tgt_temp) * 10 + 0.5) / 10, unit = "C" }))
+    emitq.emit(dev, heatSp.heatingSetpoint({ value = math.floor(tonumber(v.tgt_temp) * 10 + 0.5) / 10, unit = "C" }))
   end
   if t("tgt_state") then
     local name = model_lib.MODE_NAME[tonumber(v.tgt_state)]
-    if name and tMode.thermostatMode[name] then dev:emit_event(tMode.thermostatMode[name]()) end
+    if name and tMode.thermostatMode[name] then emitq.emit(dev, tMode.thermostatMode[name]()) end
   end
   if t("cur_state") then
     local name = model_lib.STATE_NAME[tonumber(v.cur_state)]
     if name and opState.thermostatOperatingState[name] then
-      dev:emit_event(opState.thermostatOperatingState[name]())
+      emitq.emit(dev, opState.thermostatOperatingState[name]())
     end
   end
   if t("humidity") and tonumber(v.humidity) and dev:supports_capability(humidity) then
-    dev:emit_event(humidity.humidity(math.floor(tonumber(v.humidity) + 0.5)))
+    emitq.emit(dev, humidity.humidity(math.floor(tonumber(v.humidity) + 0.5)))
   end
 end
 
 local function emit_static(dev, model)
   local modes = model_lib.supported_modes(model)
   pcall(function()
-    dev:emit_event(tMode.supportedThermostatModes(modes, { visibility = { displayed = false } }))
+    emitq.emit(dev, tMode.supportedThermostatModes(modes, { visibility = { displayed = false } }))
   end)
   local m = model.meta.tgt_temp or {}
   pcall(function()
-    dev:emit_event(heatSp.heatingSetpointRange({ value = { minimum = m.min or 5, maximum = m.max or 35,
+    emitq.emit(dev, heatSp.heatingSetpointRange({ value = { minimum = m.min or 5, maximum = m.max or 35,
       step = (m.step and m.step > 0) and m.step or 0.5 }, unit = "C" }, { visibility = { displayed = false } }))
   end)
   log.info(string.format("%s %s %s (fw %s), modes %s, setpoint %s..%s step %s", TAG,
@@ -557,12 +558,11 @@ end
 local function emit_demand(dev)
   local names = demand_list(demand_rooms(dev))
   local summary = #names == 0 and "none" or table.concat(names, ", ")
-  if dev:get_field("demand_emitted") == summary then return end
   local ok = pcall(function()
-    dev:emit_event(demand_cap.rooms(#names))
-    dev:emit_event(demand_cap.summary(summary:sub(1, 200)))
+    emitq.emit(dev, demand_cap.rooms(#names))
+    emitq.emit(dev, demand_cap.summary(summary:sub(1, 200)))
   end)
-  if ok then dev:set_field("demand_emitted", summary) end
+  if not ok then log.warn(TAG .. " heat demand event failed") end
 end
 
 local function ceil_half(x) return math.ceil(x * 2 - 1e-9) / 2 end
@@ -722,6 +722,7 @@ local function info_changed(driver, dev, event, args)
 end
 
 local function device_removed(driver, dev)
+  emitq.forget(dev)
   local c = conns[dev.id]
   if c then
     c.stopped = true

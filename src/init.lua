@@ -14,7 +14,9 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-09a"
+local BUILD = "2026-11-09b"
+local PAIR_MAX_FAILS = 5
+local pair_fails = {}  -- device.id -> failed pairing attempts in a row
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -435,7 +437,15 @@ local function pair(driver, dev)
   local c = conns[dev.id]
   if c.pairing then return end
   c.pairing, c.new_pin = true, nil
+  -- automatic retries stop after PAIR_MAX_FAILS failures in a row (a HomeKit accessory locks itself after
+  -- repeated failed attempts); entering a new code in the settings starts again
   local function again(delay)
+    pair_fails[dev.id] = (pair_fails[dev.id] or 0) + 1
+    if pair_fails[dev.id] >= PAIR_MAX_FAILS then
+      log.error(string.format("%s pairing failed %d times: no more automatic attempts. Enter the code shown on the"
+        .. " thermostat in the settings (HomeKit code) to try again", TAG, pair_fails[dev.id]))
+      return
+    end
     dev.thread:call_with_delay(delay, function() if not load_pairing(dev) then pair(driver, dev) end end)
   end
   cosock.spawn(function()
@@ -482,6 +492,7 @@ local function pair(driver, dev)
       return
     end
     save_pairing(dev, p)
+    pair_fails[dev.id] = nil
     log.info(string.format("%s paired in %.0f s with accessory %s", TAG, now() - t0, tostring(p.accessory_id)))
     start_session(driver, dev)
   end, "t6-pair-" .. dev.id)
@@ -716,6 +727,7 @@ local function info_changed(driver, dev, event, args)
       log.info(TAG .. " code received")
     elseif pin then
       log.warn(TAG .. " no pairing attempt was running: starting one now, enter the NEW code from the display")
+      pair_fails[dev.id] = nil
       pair(driver, dev)
     end
   end

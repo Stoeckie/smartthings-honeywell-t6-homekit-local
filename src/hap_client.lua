@@ -199,10 +199,7 @@ function Session:_dispatch_event(msg)
   end
 end
 
---- Send a request and wait for its response.
---- If self.wait_response is set (async mode: a reader task owns the socket), it is used instead
---- of reading inline. Events received while waiting are dispatched.
-function Session:request(method, path, body, ctype)
+function Session:_request(method, path, body, ctype)
   local ok, err = self:_send(build_request(method, path, body, ctype, self.host))
   if not ok then return nil, err end
   if self.wait_response then return self.wait_response() end
@@ -213,11 +210,40 @@ function Session:request(method, path, body, ctype)
   end
 end
 
+-- One request at a time per session. HAP answers in order and in async mode the reader hands responses
+-- out in arrival order, so two requests in flight at once (a routine setting mode and setpoint together)
+-- could lose one or take each other's response. Later requests wait here for the one before them.
+M.sleep = nil       -- function(seconds) that yields while waiting (cosock.socket.sleep on the hub)
+M.LOCK_WAIT = 45    -- max seconds to wait for the previous request (that one gives up after its own timeout)
+local LOCK_STEP = 0.05
+
+--- Send a request and wait for its response.
+--- If self.wait_response is set (async mode: a reader task owns the socket), it is used instead
+--- of reading inline. Events received while waiting are dispatched.
+function Session:request(method, path, body, ctype)
+  if self.busy then
+    if not M.sleep then return nil, "busy" end
+    local waited = 0
+    while self.busy do
+      if waited >= M.LOCK_WAIT then return nil, "busy (previous request still running)" end
+      M.sleep(LOCK_STEP)
+      waited = waited + LOCK_STEP
+    end
+  end
+  self.busy = true
+  -- release the lock on every path, also when the request raises an error
+  local ok, msg, err = pcall(self._request, self, method, path, body, ctype)
+  self.busy = false
+  if not ok then error(msg, 0) end
+  return msg, err
+end
+
 local function tlv_request(self, path, items)
   local msg, err = self:request("POST", path, tlv.encode(items), "application/pairing+tlv8")
   if not msg then return nil, err end
   if msg.status ~= 200 then return nil, "HTTP " .. tostring(msg.status) end
-  local r = tlv.decode(msg.body or "")
+  local r, derr = tlv.decode(msg.body or "")
+  if not r then return nil, "bad TLV response: " .. tostring(derr) end
   local e = tlv.get(r, T.error)
   if e then
     local code = e:byte(1)

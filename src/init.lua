@@ -14,9 +14,12 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-09c"
+local BUILD = "2026-11-09d"
 local PAIR_MAX_FAILS = 5
-local pair_fails = {}  -- device.id -> failed pairing attempts in a row
+-- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
+-- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
+local function get_pair_fails(dev) return tonumber((dev:get_field("pair_fails"))) or 0 end
+local function set_pair_fails(dev, n) dev:set_field("pair_fails", n, { persist = true }) end
 local REQUEST_TIMEOUT = 15
 local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
@@ -55,6 +58,7 @@ local opState = capabilities.thermostatOperatingState
 local humidity = capabilities.relativeHumidityMeasurement
 
 hap.json = json
+hap.sleep = function(s) cosock.socket.sleep(s) end -- requests wait for each other (one at a time per session)
 
 local function now()
   local ok, t = pcall(cosock.socket.gettime)
@@ -340,8 +344,63 @@ local function make_waiter(c)
   end
 end
 
-local function run_session(driver, dev)
-  local c = conns[dev.id]
+-- one connection attempt plus the reader loop; returns the drop reason. Runs inside pcall (see run_session).
+local function session_once(dev, c, sock, pairing, on_up)
+  local drop_reason
+  c.sock, c.alive, c.responses = sock, true, {}
+  local s = hap.session(sock, { host = "lyric" })
+  c.session = s
+  local ok, verr = s:pair_verify(pairing)
+  local accs, model
+  if ok then accs, verr = s:accessories() end
+  if accs then model, verr = model_lib.build(accs) end
+  if model then
+    c.model = model
+    local _, serr = s:subscribe(model_lib.read_ids(model))
+    if serr then log.warn(TAG .. " subscribe: " .. tostring(serr)) end
+    dev:online(); set_conn(dev, true)
+    emit_static(dev, model)
+    safe_emit(dev, model, nil)
+    c.last_rx = now()
+    log.info(TAG .. " session up")
+    apply_demand_soon(dev)
+    on_up()
+    -- The reader loop owns the socket from now on. It wakes up every READ_IDLE seconds: on the hub,
+    -- closing a socket does not wake a coroutine that is blocked in receive, so without this a
+    -- dead connection (closed after a request timeout) left the session hanging forever.
+    sock:settimeout(READ_IDLE)
+    s.on_event = function(chars)
+      local touched = model_lib.apply(model, chars)
+      if touched then safe_emit(dev, model, touched) end
+      if touched and (touched.cur_temp or touched.tgt_state) then apply_demand_soon(dev) end
+    end
+    s.wait_response = make_waiter(c)
+    while c.alive do
+      local msg, rerr = s:read_message()
+      if msg then
+        c.last_rx = now()
+        if msg.event then s:_dispatch_event(msg) else c.responses[#c.responses + 1] = msg end
+      elseif rerr == "timeout" and c.alive then
+        -- idle: nothing to read, the connection is still ours
+      else
+        if c.alive then log.warn(TAG .. " session closed: " .. tostring(rerr)) end
+        drop_reason = "session closed: " .. tostring(c.alive and rerr or (c.close_reason or rerr))
+        break
+      end
+    end
+  else
+    log.error(TAG .. " session setup failed: " .. tostring(verr))
+    drop_reason = "session setup failed: " .. tostring(verr)
+    if tostring(verr):find("unknown accessory id") or tostring(verr):find("authentication") then
+      log.error(TAG .. " the thermostat no longer knows this hub; remove pairing and pair again")
+    end
+  end
+  return drop_reason
+end
+
+-- c is this session's own connection table (passed in, not read from conns): when start_session runs
+-- again meanwhile, the old task sees its own c.stopped and ends instead of sharing the new c.
+local function run_session(driver, dev, c)
   local backoff = RECONNECT_MIN
   while c and not c.stopped do
     local pairing = load_pairing(dev)
@@ -351,54 +410,18 @@ local function run_session(driver, dev)
     end
     local drop_reason
     local sock, err = open_socket(dev, 20)
+    if sock and c.stopped then -- replaced while connecting
+      pcall(function() sock:close() end)
+      return
+    end
     if sock then
-      c.sock, c.alive, c.responses = sock, true, {}
-      local s = hap.session(sock, { host = "lyric" })
-      c.session = s
-      local ok, verr = s:pair_verify(pairing)
-      local accs, model
-      if ok then accs, verr = s:accessories() end
-      if accs then model, verr = model_lib.build(accs) end
-      if model then
-        c.model = model
-        local _, serr = s:subscribe(model_lib.read_ids(model))
-        if serr then log.warn(TAG .. " subscribe: " .. tostring(serr)) end
-        dev:online(); set_conn(dev, true)
-        emit_static(dev, model)
-        safe_emit(dev, model, nil)
-        c.last_rx = now()
-        log.info(TAG .. " session up")
-        apply_demand_soon(dev)
-        backoff = RECONNECT_MIN
-        -- The reader loop owns the socket from now on. It wakes up every READ_IDLE seconds: on the hub,
-        -- closing a socket does not wake a coroutine that is blocked in receive, so without this a
-        -- dead connection (closed after a request timeout) left the session hanging forever.
-        sock:settimeout(READ_IDLE)
-        s.on_event = function(chars)
-          local touched = model_lib.apply(model, chars)
-          if touched then safe_emit(dev, model, touched) end
-          if touched and (touched.cur_temp or touched.tgt_state) then apply_demand_soon(dev) end
-        end
-        s.wait_response = make_waiter(c)
-        while c.alive do
-          local msg, rerr = s:read_message()
-          if msg then
-            c.last_rx = now()
-            if msg.event then s:_dispatch_event(msg) else c.responses[#c.responses + 1] = msg end
-          elseif rerr == "timeout" and c.alive then
-            -- idle: nothing to read, the connection is still ours
-          else
-            if c.alive then log.warn(TAG .. " session closed: " .. tostring(rerr)) end
-            drop_reason = "session closed: " .. tostring(c.alive and rerr or (c.close_reason or rerr))
-            break
-          end
-        end
+      -- a Lua error (e.g. a malformed answer) must not leave c.alive set forever: close and reconnect
+      local ok, res = pcall(session_once, dev, c, sock, pairing, function() backoff = RECONNECT_MIN end)
+      if ok then
+        drop_reason = res
       else
-        log.error(TAG .. " session setup failed: " .. tostring(verr))
-        drop_reason = "session setup failed: " .. tostring(verr)
-        if tostring(verr):find("unknown accessory id") or tostring(verr):find("authentication") then
-          log.error(TAG .. " the thermostat no longer knows this hub; remove pairing and pair again")
-        end
+        log.error(TAG .. " session error: " .. tostring(res))
+        drop_reason = "session error: " .. tostring(res)
       end
       close_conn(c)
     else
@@ -419,8 +442,9 @@ local function start_session(driver, dev)
     old.stopped = true
     close_conn(old)
   end
-  conns[dev.id] = { responses = {} }
-  cosock.spawn(function() run_session(driver, dev) end, "t6-session-" .. dev.id)
+  local c = { responses = {} }
+  conns[dev.id] = c
+  cosock.spawn(function() run_session(driver, dev, c) end, "t6-session-" .. dev.id)
 end
 
 -- pairing -----------------------------------------------------------------------------------------
@@ -433,24 +457,28 @@ end
 local CODE_WAIT = 300 -- seconds the hub waits for the code from the thermostat display
 
 local function pair(driver, dev)
-  conns[dev.id] = conns[dev.id] or { responses = {} }
+  -- a stopped entry (after "remove pairing") would end the wait for a new code at once: start fresh
+  if not conns[dev.id] or conns[dev.id].stopped then conns[dev.id] = { responses = {} } end
   local c = conns[dev.id]
   if c.pairing then return end
   c.pairing, c.new_pin = true, nil
   -- automatic retries stop after PAIR_MAX_FAILS failures in a row (a HomeKit accessory locks itself after
   -- repeated failed attempts); entering a new code in the settings starts again
   local function again(delay)
-    pair_fails[dev.id] = (pair_fails[dev.id] or 0) + 1
-    if pair_fails[dev.id] >= PAIR_MAX_FAILS then
+    local fails = get_pair_fails(dev) + 1
+    set_pair_fails(dev, fails)
+    if fails >= PAIR_MAX_FAILS then
       log.error(string.format("%s pairing failed %d times: no more automatic attempts. Enter the code shown on the"
-        .. " thermostat in the settings (HomeKit code) to try again", TAG, pair_fails[dev.id]))
+        .. " thermostat in the settings (HomeKit code) to try again", TAG, fails))
       return
     end
     dev.thread:call_with_delay(delay, function() if not load_pairing(dev) then pair(driver, dev) end end)
   end
-  cosock.spawn(function()
+  local sock
+  local function attempt()
     refresh_address(dev)
-    local sock, err = open_socket(dev, 120)
+    local err
+    sock, err = open_socket(dev, 120)
     if not sock then
       log.warn(TAG .. " pairing: " .. tostring(err) .. " (HomeKit not active? retry in 60 s)")
       c.pairing = false
@@ -492,9 +520,19 @@ local function pair(driver, dev)
       return
     end
     save_pairing(dev, p)
-    pair_fails[dev.id] = nil
+    set_pair_fails(dev, nil)
     log.info(string.format("%s paired in %.0f s with accessory %s", TAG, now() - t0, tostring(p.accessory_id)))
     start_session(driver, dev)
+  end
+  cosock.spawn(function()
+    -- a Lua error (e.g. a malformed TLV answer) must not leave c.pairing set forever
+    local ok, e = pcall(attempt)
+    if not ok and c.pairing then
+      log.error(TAG .. " pairing error: " .. tostring(e))
+      if sock then pcall(function() sock:close() end) end
+      c.pairing = false
+      again(60)
+    end
   end, "t6-pair-" .. dev.id)
 end
 
@@ -694,9 +732,12 @@ local function device_init(driver, dev)
   -- keep the random pool for HomeKit keys across restarts (see rng.lua)
   hap.rng.seed(dev:get_field("rng_pool"))
   hap.rng.save = function(p) dev:set_field("rng_pool", (p:gsub(".", function(c) return string.format("%02x", c:byte()) end)), { persist = true }) end
-  dev.thread:call_on_schedule(POLL_SECS, function()
+  -- added calls init again: keep only one poll timer per device
+  local old_timer = dev:get_field("poll_timer")
+  if old_timer then pcall(dev.thread.cancel_timer, dev.thread, old_timer) end
+  dev:set_field("poll_timer", dev.thread:call_on_schedule(POLL_SECS, function()
     cosock.spawn(function() poll(driver, dev) end, "t6-poll")
-  end, "t6-poll")
+  end, "t6-poll"))
   pcall(emit_demand, dev)
   if load_pairing(dev) then start_session(driver, dev) else pair(driver, dev) end
 end
@@ -730,7 +771,7 @@ local function info_changed(driver, dev, event, args)
       log.info(TAG .. " code received")
     elseif pin then
       log.warn(TAG .. " no pairing attempt was running: starting one now, enter the NEW code from the display")
-      pair_fails[dev.id] = nil
+      set_pair_fails(dev, nil)
       pair(driver, dev)
     end
   end

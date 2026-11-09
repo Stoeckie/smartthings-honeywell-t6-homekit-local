@@ -4,10 +4,11 @@
 -- the hub then drops events of that device and the app keeps a stale value. SmartThings asks for about one event
 -- a minute per device outside real changes, and allows about 12 state events a minute per device.
 --
--- The hub itself drops an event whose value it already has, so a value the cloud missed would stay wrong for ever.
--- Therefore the first emit of every attribute after a driver start carries state_change = true, which the hub
--- always passes on. An optional periodic resend (seconds; 0 = off) does the same later; note that a forced event
--- also fires routines and notifications again, like a button press does.
+-- After a driver start (install, update, hub reboot) the first value of every attribute is compared with what the
+-- platform already has (device:get_latest_state): the same value is not sent again. A forced event (state_change)
+-- fires routines and notifications again like a button press does: before 2026-11-09 the first emit after a start
+-- was forced, so every driver update re-ran routines (curtains closed, "online" notifications). Only a manual
+-- refresh (force) and the optional periodic resend (seconds; 0 = off) still force.
 --
 -- Usage: local emitq = require "emitq"
 --        emitq.emit(dev, capabilities.switch.switch.on())              -- main component
@@ -40,6 +41,26 @@ local function jitter(key, secs)
   return n
 end
 
+-- what the platform shows for this attribute, as the same json as val (nil when unknown)
+local function latest_json(dev, comp, ev)
+  local cap = ev.capability_id or ev.capability
+  if type(cap) == "table" then cap = cap.ID or cap.id end
+  local attr = ev.attribute_id or ev.attribute
+  if type(attr) == "table" then attr = attr.NAME or attr.name end
+  local ok, v = pcall(dev.get_latest_state, dev, comp and comp.id or "main", cap, attr)
+  if not ok or v == nil then return nil end
+  local s = ev_state(ev)
+  -- an event value can be { value = 21, unit = "C" } while get_latest_state gives 21
+  if type(s) == "table" and s.value ~= nil and type(v) ~= "table" then
+    local copy = {}
+    for k, x in pairs(s) do copy[k] = x end
+    copy.value = v
+    v = copy
+  end
+  local ok2, j = pcall(json.encode, { v, ev.visibility })
+  return ok2 and j or nil
+end
+
 local function raw_emit(dev, comp, ev)
   if comp then dev:emit_component_event(comp, ev) else dev:emit_event(ev) end
 end
@@ -70,7 +91,11 @@ function M.emit(dev, ev, comp, force)
   local c, now = cache[key], os.time()
   local resend = M.resend_secs or 0
   if c and c.v == val and not force and (resend <= 0 or now - c.t < resend + jitter(key, resend)) then return false end
-  if not c or c.v == val then ev.state_change = true end
+  if not c and not force and latest_json(dev, comp, ev) == val then
+    cache[key] = { v = val, t = now }   -- first value after a start, the platform already has it: nothing sent
+    return false
+  end
+  if force or (c and c.v == val) then ev.state_change = true end   -- manual refresh, or periodic resend
   raw_emit(dev, comp, ev)
   cache[key] = { v = val, t = now }
   return true

@@ -53,8 +53,9 @@ function M.decode(s)
   return items
 end
 
--- First value with the given type, or nil.
+-- First value with the given type, or nil. items may be nil (a failed decode): nil, not an error.
 function M.get(items, t)
+  if type(items) ~= "table" then return nil end
   for _, it in ipairs(items) do
     if it.type == t then return it.value end
   end

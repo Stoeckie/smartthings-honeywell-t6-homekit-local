@@ -25,21 +25,10 @@ local ERRORS = { [1] = "unknown", [2] = "authentication (wrong code?)", [3] = "b
 M.json = nil
 local function json() return M.json or require("st.json") end
 
--- random bytes: caller should set M.random_bytes to a good source; fallback mixes clock jitter
--- and math.random through SHA-512.
-local pool = sha.sha512(tostring(os.time()) .. tostring(os.clock()) .. tostring({}) .. tostring(math.random()))
-function M.random_bytes(n)
-  local out = {}
-  local have = 0
-  while have < n do
-    local jitter = {}
-    for i = 1, 16 do jitter[i] = string.format("%.9f%d", os.clock(), math.random(0, 0x7fffffff)) end
-    pool = sha.sha512(pool .. table.concat(jitter) .. tostring(os.time()) .. tostring(collectgarbage("count")))
-    out[#out + 1] = pool:sub(1, 32)
-    have = have + 32
-  end
-  return table.concat(out):sub(1, n)
-end
+-- random bytes for keys: see rng.lua (os.time/os.clock/math.random alone are far too predictable for a key)
+local rng = require "rng"
+M.rng = rng
+function M.random_bytes(n) return rng.bytes(n) end
 
 local function hkdf(key, salt, info) return sha.hkdf(key, salt, info, 32) end
 local function u8(n) return string.char(n) end

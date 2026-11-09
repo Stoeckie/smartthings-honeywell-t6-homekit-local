@@ -14,7 +14,7 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-09b"
+local BUILD = "2026-11-09c"
 local PAIR_MAX_FAILS = 5
 local pair_fails = {}  -- device.id -> failed pairing attempts in a row
 local REQUEST_TIMEOUT = 15
@@ -691,6 +691,9 @@ end
 
 -- lifecycle ----------------------------------------------------------------------------------------------
 local function device_init(driver, dev)
+  -- keep the random pool for HomeKit keys across restarts (see rng.lua)
+  hap.rng.seed(dev:get_field("rng_pool"))
+  hap.rng.save = function(p) dev:set_field("rng_pool", (p:gsub(".", function(c) return string.format("%02x", c:byte()) end)), { persist = true }) end
   dev.thread:call_on_schedule(POLL_SECS, function()
     cosock.spawn(function() poll(driver, dev) end, "t6-poll")
   end, "t6-poll")

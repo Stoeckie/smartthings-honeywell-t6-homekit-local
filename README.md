@@ -88,6 +88,10 @@ A value only goes to the hub when it changed. After a driver start every value i
 * **"HomeKit error 2"**: wrong code (use the code on the display, not the sticker). **"HomeKit error 6"**: already paired with another controller (Apple Home): remove it there or reset HomeKit on the thermostat.
 * Logs: `smartthings edge:drivers:logcat <driverId> --hub-address <hub-ip>`, lines start with `[t6]`. After pairing the log shows model, firmware, supported modes and setpoint range.
 
+## Keys
+
+The driver makes its HomeKit keys itself. The hub offers drivers no secure random source, and the clock plus `math.random` hold far too little randomness for a key, so from build 2026-11-09 the keys come from `rng.lua`: `/dev/urandom` where the hub allows it, plus timing jitter of the CPU, collected in a pool that is kept across restarts. Pairings made with an older build keep working; to get a new long-term key, remove the device, reset the HomeKit pairing and add it again (not required).
+
 ## Privacy
 
 The HomeKit code is a device setting. The pairing keys are stored on the hub as device fields. Nothing secret is in this code or the package.

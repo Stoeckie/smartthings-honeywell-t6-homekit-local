@@ -14,7 +14,7 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-09d"
+local BUILD = "2026-11-15a"
 local PAIR_MAX_FAILS = 5
 -- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
 -- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
@@ -50,6 +50,7 @@ end
 local demand_cap = capabilities["silvervalley08660.heatDemand"]
 local DEMAND_FIELD = "heat_rooms"
 local apply_demand_soon -- defined after the session code
+local manual_setpoint   -- same
 
 local tempMeas = capabilities.temperatureMeasurement
 local heatSp = capabilities.thermostatHeatingSetpoint
@@ -370,8 +371,13 @@ local function session_once(dev, c, sock, pairing, on_up)
     -- dead connection (closed after a request timeout) left the session hanging forever.
     sock:settimeout(READ_IDLE)
     s.on_event = function(chars)
+      local old_sp = model.values.tgt_temp
       local touched = model_lib.apply(model, chars)
       if touched then safe_emit(dev, model, touched) end
+      if touched and touched.tgt_temp then -- changed on the thermostat (or in its own app)
+        local ok, err = pcall(manual_setpoint, dev, old_sp, model.values.tgt_temp)
+        if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
+      end
       if touched and (touched.cur_temp or touched.tgt_state) then apply_demand_soon(dev) end
     end
     s.wait_response = make_waiter(c)
@@ -577,7 +583,13 @@ local function handle_setpoint(driver, dev, cmd)
   if tonumber(cmd.args.setpoint) ~= raw then
     log.info(string.format("%s setpoint %s read as °F -> %s °C", TAG, tostring(cmd.args.setpoint), tostring(v)))
   end
-  cosock.spawn(function() write(dev, "tgt_temp", v, "setpoint " .. tostring(v)) end, "t6-setpoint")
+  cosock.spawn(function()
+    local old_sp = c and c.model and c.model.values.tgt_temp
+    if write(dev, "tgt_temp", v, "setpoint " .. tostring(v)) then
+      local ok, err = pcall(manual_setpoint, dev, old_sp, v)
+      if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
+    end
+  end, "t6-setpoint")
 end
 
 local function set_mode(dev, name)
@@ -604,9 +616,38 @@ local function demand_list(rooms)
   return names
 end
 
+-- Paused rooms. When the setpoint is lowered by hand (on the thermostat or in the app) while rooms ask for
+-- heat, those rooms stop counting: "not now". A room counts again when it stops asking and asks again later,
+-- when the setpoint is raised by hand, or after pauseMinutes (so a room that keeps asking is not ignored
+-- forever). Without this the driver put the setpoint back up within a minute.
+local PAUSE_FIELD = "heat_paused"
+
+local function paused_rooms(dev)
+  local r = dev:get_field(PAUSE_FIELD)
+  return type(r) == "table" and r or {}
+end
+
+-- rooms that ask for heat and are not paused, the paused ones; expired pauses are dropped
+local function demand_split(dev)
+  local rooms, paused, t = demand_rooms(dev), paused_rooms(dev), now()
+  local asking, held, changed = {}, {}, false
+  for name, untl in pairs(paused) do
+    if not rooms[name] or (tonumber(untl) or 0) <= t then paused[name] = nil; changed = true end
+  end
+  if changed then
+    dev:set_field(PAUSE_FIELD, next(paused) and paused or nil, { persist = true })
+    log.info(TAG .. " heat demand: pause ended")
+  end
+  for _, name in ipairs(demand_list(rooms)) do
+    if paused[name] then held[#held + 1] = name else asking[#asking + 1] = name end
+  end
+  return asking, held, changed
+end
+
 local function emit_demand(dev)
-  local names = demand_list(demand_rooms(dev))
+  local names, held = demand_split(dev)
   local summary = #names == 0 and "none" or table.concat(names, ", ")
+  if #held > 0 then summary = summary .. "; paused: " .. table.concat(held, ", ") end
   local ok = pcall(function()
     emitq.emit(dev, demand_cap.rooms(#names))
     emitq.emit(dev, demand_cap.summary(summary:sub(1, 200)))
@@ -630,7 +671,9 @@ local function apply_demand(dev)
   local v = c.model.values
   local mode = tonumber(v.tgt_state)
   if mode ~= 1 and mode ~= 3 then return end -- thermostat off: leave it alone
-  local n = #demand_list(demand_rooms(dev))
+  local asking, _, pause_ended = demand_split(dev)
+  if pause_ended then emit_demand(dev) end
+  local n = #asking
   local p = dev.preferences or {}
   local idle = model_lib.to_celsius(p.idleSetpoint) or 19 -- °C; a value above 40 is read as °F
   local step = tonumber(p.stepPerRoom) or 0.5
@@ -681,6 +724,32 @@ apply_demand_soon = function(dev)
   if not ok then cosock.spawn(function() safe_apply_demand(dev) end, "t6-demand") end
 end
 
+-- A setpoint change that is not the driver's own heat demand write: from the thermostat itself or a setpoint
+-- command. Lower while rooms ask: pause those rooms. Higher: heat is wanted, the pauses end.
+manual_setpoint = function(dev, old, new)
+  old, new = tonumber(old), tonumber(new)
+  if not (old and new) or old == new then return end
+  if not dev:get_field("demand_active") and dev:get_field(DEMAND_FIELD) == nil then return end
+  local asking, held = demand_split(dev)
+  local mins = tonumber((dev.preferences or {}).pauseMinutes) or 120
+  if new < old and #asking > 0 and mins > 0 then
+    local paused, untl = paused_rooms(dev), now() + mins * 60
+    for _, name in ipairs(asking) do paused[name] = untl end
+    dev:set_field(PAUSE_FIELD, paused, { persist = true })
+    dev:set_field("demand_last_n", 0, { persist = true }) -- the lowered setpoint is kept, not replaced by idle
+    log.info(string.format("%s heat demand: setpoint lowered by hand %s -> %s, %d room(s) paused for %d min",
+      TAG, tostring(old), tostring(new), #asking, mins))
+    -- shown a little later, so a routine that reacts to the lowered setpoint still sees the rooms asking
+    local ok = pcall(function() dev.thread:call_with_delay(5, function() emit_demand(dev) end) end)
+    if not ok then emit_demand(dev) end
+  elseif new > old and #held > 0 then
+    dev:set_field(PAUSE_FIELD, nil, { persist = true })
+    log.info(TAG .. " heat demand: setpoint raised by hand, pauses ended")
+    emit_demand(dev)
+    apply_demand_soon(dev)
+  end
+end
+
 local function handle_set_room(driver, dev, cmd)
   local room = tostring(cmd.args.room or ""):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 40)
   if room == "" then return end
@@ -693,6 +762,13 @@ local function handle_set_room(driver, dev, cmd)
   if (rooms[room] == true) ~= on then
     rooms[room] = on or nil
     dev:set_field(DEMAND_FIELD, rooms, { persist = true })
+    if not on then -- stopped asking: the next time this room asks it counts again
+      local paused = paused_rooms(dev)
+      if paused[room] then
+        paused[room] = nil
+        dev:set_field(PAUSE_FIELD, next(paused) and paused or nil, { persist = true })
+      end
+    end
     log.info(string.format("%s heat demand: %s %s (%d room(s) asking)", TAG, room, on and "on" or "off",
       #demand_list(rooms)))
   end
@@ -703,6 +779,7 @@ end
 -- clearRooms: forget all rooms and switch heat demand control off until the next setRoom
 local function handle_clear_rooms(driver, dev)
   dev:set_field(DEMAND_FIELD, nil, { persist = true })
+  dev:set_field(PAUSE_FIELD, nil, { persist = true })
   dev:set_field("demand_active", nil, { persist = true })
   dev:set_field("demand_last_n", 0, { persist = true })
   log.info(TAG .. " heat demand: all rooms cleared, control off until the next setRoom")

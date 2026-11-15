@@ -141,3 +141,41 @@ def test_to_celsius():
     assert m.to_celsius(40) == 40
     assert abs(m.to_celsius(68) - 20) < 1e-9
     assert m.to_celsius(b"abc") is None
+
+
+def test_lowered_by_hand_pauses_the_rooms():
+    # DS 15-11: lower the T6 while rooms ask -> those rooms are ignored instead of the setpoint going back up
+    lua, g = setup()
+    lua.execute(SETPOINT)
+    room = g.ROOM
+    assert room(b"Noi", b"on") == 20.0
+    assert room(b"Liselot", b"on") == 20.5
+    g.SETPOINT_CMD(18)
+    sp = lambda: lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp')
+    assert sp() == 18
+    g.SET(b"cur_temp", 19.0)
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert sp() == 18                              # not back up, and not replaced by the idle setpoint
+    summ = [e[b"arg"] for e in g.DEV[b"events"].values() if e[b"path"].endswith(b"heatDemand.summary")]
+    assert summ[-1] == b"none; paused: Liselot, Noi", summ
+    assert room(b"DJ", b"on") == 19.5              # a room that asks later counts: 19.0 + 0.5
+    assert room(b"Noi", b"off") == 19.5 and room(b"Noi", b"on") == 20.0   # asked again: counts again
+    # raised by hand: heat is wanted, the remaining pause ends
+    g.SETPOINT_CMD(22)
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    summ = [e[b"arg"] for e in g.DEV[b"events"].values() if e[b"path"].endswith(b"heatDemand.summary")]
+    assert summ[-1] == b"DJ, Liselot, Noi", summ
+
+
+def test_pause_ends_after_pause_minutes():
+    lua, g = setup()
+    lua.execute(SETPOINT)
+    room = g.ROOM
+    assert room(b"Keuken", b"on") == 20.0
+    g.SETPOINT_CMD(18)
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    sp = lambda: lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp')
+    assert sp() == 18
+    lua.execute(b'local p = DEV:get_field("heat_paused"); p.Keuken = 1; DEV:set_field("heat_paused", p)')
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert sp() == 20.0

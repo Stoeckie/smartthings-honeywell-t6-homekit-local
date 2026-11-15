@@ -14,7 +14,7 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-15a"
+local BUILD = "2026-11-15b"
 local PAIR_MAX_FAILS = 5
 -- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
 -- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
@@ -25,7 +25,10 @@ local POLL_SECS = 300
 -- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
 -- 5 minute poll grid, on both thermostats at the same second). It pushes every change anyway, so a
 -- poll is only sent when nothing at all came in for IDLE_POLL seconds (to find a dead connection).
-local IDLE_POLL = 900
+-- With 900 s a quiet thermostat was polled, and so dropped for 10 to 30 s, every 20 minutes (the 4th
+-- timer tick after each reconnect; both thermostats at the same second). Once an hour is enough: a dead
+-- connection also shows at the next write, which is retried after the reconnect.
+local IDLE_POLL = 3600
 local RECONNECT_MIN, RECONNECT_MAX = 3, 300
 local READ_IDLE = 20 -- seconds the reader loop waits before checking whether the session is still wanted
 local TAG = "[t6]"

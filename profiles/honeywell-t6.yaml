@@ -81,7 +81,7 @@ preferences:
       maximum: 3
       default: 0.5
   - name: pauseMinutes
-    title: Pause rooms when the setpoint is lowered by hand (minutes)
+    title: Pause after lowering by hand (min)
     description: "Lower the setpoint on the thermostat or in the app while rooms ask for heat: those rooms are ignored until they stop asking, the setpoint is raised by hand or this time has passed. 0 switches this off."
     required: false
     preferenceType: integer

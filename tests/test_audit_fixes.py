@@ -83,7 +83,23 @@ def test_lua_error_in_setup_closes_connection():
     assert not c[b"alive"] and c[b"sock"] is None
     assert lua.eval(b'SOCKS[1].closed') is True
     assert any(b"session error" in m for m in lua.eval(b'LOGS').values())
-    assert lua.eval(b'DEV.state') == b"offline"  # the normal reconnect path ran
+    assert lua.eval(b'DEV.fields.conn_down_since') is not None  # the normal reconnect path ran
+    assert lua.eval(b'DEV.state') == b"online"   # offline in the app only after the grace time (see below)
+
+
+def test_offline_only_after_the_grace_time():
+    # A lost session is back within seconds and happens several times an hour: the device stays online in the
+    # app. Only when the thermostat is still away after "Offline after (minutes)" it goes offline.
+    lua = setup()
+    lua.execute(b'''
+      DEV.fields.hap_pairing = PAIRING; SEND_ERROR = true
+      DEV.thread.call_with_delay = function(_, secs, fn) GRACE, GONE = secs, fn end
+      DRIVER.lifecycle_handlers.init(DRIVER_OBJ, DEV)''')
+    assert lua.eval(b'DEV.state') == b"online" and lua.eval(b'GRACE') == 300
+    lua.execute(b'GONE()')
+    assert lua.eval(b'DEV.state') == b"offline"
+    conn = [e[b"arg"] for e in lua.eval(b'DEV.events').values() if e[b"path"].endswith(b"connectionStatus.status")]
+    assert conn[-1] == b"offline", conn
 
 
 def test_lua_error_in_pairing_resets_pairing_flag():

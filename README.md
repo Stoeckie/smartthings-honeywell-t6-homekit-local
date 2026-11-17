@@ -14,7 +14,7 @@ Forum topic: https://community.smartthings.com/t/311952
 * **Heating setpoint**: read and set, rounded to the thermostat's step (0.5 °C). With a SmartThings location in Fahrenheit the app shows °F; a setpoint sent in °F is converted to °C
 * **Mode**: off / heat / auto (whatever the thermostat reports as supported)
 * **Operating state**: heating or idle, i.e. whether the thermostat itself is calling for heat. Useful in routines ("only raise the setpoint when the thermostat is not heating yet").
-* Live updates: the thermostat pushes every change, plus a safety poll every 5 minutes
+* Live updates: the thermostat pushes every change; when it has been quiet for a minute the driver asks for the values, which also finds a lost session (see Lost sessions)
 * **Connection** status (Connected or Offline) and **Last drop**, for offline notifications in routines
 * Automatic reconnect
 * **Heat demand per room** (optional): a rule tells the thermostat which rooms ask for heat; the setpoint follows the number of rooms (see below)
@@ -62,7 +62,7 @@ powershell -ExecutionPolicy Bypass -File heat-demand-rule.ps1
 
 It lists every device in the T6's location that has a temperature and a heating setpoint (radiator valves, floor heating thermostats), you type the numbers of the rooms that count, and it creates or updates the rule "Heat demand (Honeywell T6)". Run it again to change the rooms. Options: `-RoomIds "<id>,<id>"` (no questions), `-RuleName "..."`, `-DryRun` (only writes the JSON), `-Cli "C:\Program Files\SmartThings\smartthings.exe"`.
 
-**Lowering the setpoint by hand** (on the thermostat or in the app) while rooms ask for heat pauses those rooms: they no longer count, so the setpoint stays where you put it. A room counts again when it stops asking and asks again later, when you raise the setpoint by hand, or after the setting "Pause after lowering by hand (min)" (default 120 minutes, 0 = off). The summary shows them as `paused: ...`. A change made on the thermostat itself is also seen when it does not arrive as an event: the T6 closes its HomeKit session when it is operated, so the driver compares the setpoint after the reconnect (and at every poll) with the one it knew before. A setpoint the driver wrote itself is never taken for a change by hand, also not when the thermostat applied it but closed the session before answering.
+**Lowering the setpoint by hand** (on the thermostat or in the app) while rooms ask for heat pauses those rooms: they no longer count, so the setpoint stays where you put it. A room counts again when it stops asking and asks again later, when you raise the setpoint by hand, or after the setting "Pause after lowering by hand (min)" (default 120 minutes, 0 = off). The summary shows them as `paused: ...`. A change made on the thermostat itself is also seen when it does not arrive as an event (the session was lost, see Lost sessions): the driver compares the setpoint after the reconnect (and at every poll) with the one it knew before. A setpoint the driver wrote itself is never taken for a change by hand, also not when the thermostat applied it but closed the session before answering.
 
 To stop: delete the rule (`smartthings rules:delete <ruleId>`) and send `clearRooms` to the T6 (or just delete the rule; with no room asking the setpoint returns to the idle value once and is then left alone).
 
@@ -76,9 +76,15 @@ A complete example of the rule (my own setup with placeholder IDs) and the logic
  "else": [{"command": {"devices": ["<t6>"], "commands": [{"component": "main", "capability": "silvervalley08660.heatDemand", "command": "setRoom", "arguments": [{"string": "Kitchen"}, {"string": "off"}]}]}}]}}
 ```
 
+## Lost sessions
+
+The T6 drops its HomeKit session without telling the hub every time it moves to another Wi-Fi access point or rejoins the Wi-Fi. With several access points in the house that can be several times an hour. On the hub the connection still looks fine, but nothing arrives any more. The driver therefore asks for the values when nothing came in for a minute; if the session turns out to be gone it reconnects, which takes about 10 seconds, and **Last drop** shows it. A request does not harm a live session.
+
+Two things that help on the network side: lock the thermostat to its nearest access point (UniFi: client settings, Lock to Access Point), and do not block the thermostat from the internet. A T6 that cannot reach the Resideo cloud appears to rejoin the Wi-Fi every 5 to 15 minutes (seen here after blocking it in the firewall), and every time the session is lost.
+
 ## Offline and online notification
 
-SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection only turns Offline after **Offline after (minutes)** without a connection (setting, default 5, so a router update at night gives no notification); every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
+SmartThings has no routine trigger for "device offline". Make a routine: if Honeywell T6 > Connection is Offline, send a notification. Connection, and the device in the app, only turn Offline after **Offline after (minutes)** without a connection (setting, default 5, so a router update at night or a lost session gives no notification); every drop is shown afterwards as **Last drop** (time UTC, duration, reason). Tip: duplicate that routine and change the condition to Connection is Connected to also get a "back online" notification.
 
 ## Events
 

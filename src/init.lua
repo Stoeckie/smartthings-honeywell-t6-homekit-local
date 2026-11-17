@@ -14,21 +14,23 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-17b"
+local BUILD = "2026-11-17c"
 local PAIR_MAX_FAILS = 5
 -- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
 -- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
 local function get_pair_fails(dev) return tonumber((dev:get_field("pair_fails"))) or 0 end
 local function set_pair_fails(dev, n) dev:set_field("pair_fails", n, { persist = true }) end
 local REQUEST_TIMEOUT = 15
-local POLL_SECS = 300
--- The T6 often closes the session right after a poll (all drops in the logs fell exactly on the
--- 5 minute poll grid, on both thermostats at the same second). It pushes every change anyway, so a
--- poll is only sent when nothing at all came in for IDLE_POLL seconds (to find a dead connection).
--- With 900 s a quiet thermostat was polled, and so dropped for 10 to 30 s, every 20 minutes (the 4th
--- timer tick after each reconnect; both thermostats at the same second). Once an hour is enough: a dead
--- connection also shows at the next write, which is retried after the reconnect.
-local IDLE_POLL = 3600
+-- The T6 loses its HomeKit session without saying so every time it moves to another access point or rejoins
+-- the Wi-Fi (17-11-2026: the router log showed that several times an hour, and every drop the driver saw was
+-- the first request after such a moment). On the hub the connection still looks fine, but nothing arrives any
+-- more: no temperature, no setpoint changed on the thermostat. The driver only finds out when it sends something.
+-- So it asks for the values as soon as nothing came in for IDLE_POLL seconds (timer every POLL_SECS). A request
+-- does not harm a live session (tested: three in a row on a fresh session, no drop). Builds up to 2026-11-17b
+-- took the drops on the poll grid for the T6 closing its session after a poll and asked only once an hour, which
+-- left the thermostat unheard for up to an hour.
+local POLL_SECS = 30
+local IDLE_POLL = 60
 local RECONNECT_MIN, RECONNECT_MAX = 3, 300
 local READ_IDLE = 20 -- seconds the reader loop waits before checking whether the session is still wanted
 local TAG = "[t6]"
@@ -128,12 +130,15 @@ local function set_conn(dev, up, reason)
   if dev:get_field("conn_down_since") then return end
   local since = os.time()
   dev:set_field("conn_down_since", since)
+  -- Offline, in the app and as connection status, only when the thermostat stays away for the grace time: a lost
+  -- session is back within seconds, and those happen several times an hour (see IDLE_POLL).
+  local function gone() emit_conn(dev, "offline"); pcall(function() dev:offline() end) end
   local ok = pcall(function()
     dev.thread:call_with_delay(conn_grace(dev), function()
-      if dev:get_field("conn_down_since") == since then emit_conn(dev, "offline") end
+      if dev:get_field("conn_down_since") == since then gone() end
     end)
   end)
-  if not ok then emit_conn(dev, "offline") end
+  if not ok then gone() end
 end
 
 -- pairing storage ----------------------------------------------------------------------------
@@ -452,7 +457,7 @@ local function run_session(driver, dev, c)
       drop_reason = "no connection: " .. tostring(err)
     end
     if c.stopped then return end
-    set_conn(dev, false, drop_reason); dev:offline()
+    set_conn(dev, false, drop_reason)
     cosock.socket.sleep(backoff)
     backoff = math.min(backoff * 2, RECONNECT_MAX)
     refresh_address(dev)
@@ -719,8 +724,8 @@ local function apply_demand(dev)
     -- still have applied it; setpoint_after_reconnect then knows the new setpoint is not a change by hand.
     if done or c.alive then c.own_sp = nil end
   end
-  -- Remember the number of rooms only once the setpoint is written. If the write fails (the T6 closes
-  -- its HomeKit session every 20 min), the next try after the reconnect still sees the change; before,
+  -- Remember the number of rooms only once the setpoint is written. If the write fails (the session was
+  -- already lost, see IDLE_POLL), the next try after the reconnect still sees the change; before,
   -- "no room asks" was then lost and the boiler kept heating on the old setpoint.
   if done and n ~= last_n then dev:set_field("demand_last_n", n, { persist = true }) end
 end
@@ -772,9 +777,9 @@ manual_setpoint = function(dev, old, new)
   end
 end
 
--- The T6 closes its HomeKit session when it is operated on the thermostat itself, so that change never arrives
--- as an event: the new setpoint is only seen after the reconnect. Compare it with the setpoint from before the
--- drop and treat a difference as a change by hand; otherwise the heat demand wrote the old setpoint back 2 s later.
+-- A setpoint changed on the thermostat itself while the session was lost (see IDLE_POLL) never arrives as an
+-- event: the new setpoint is only seen after the reconnect. Compare it with the setpoint from before the drop
+-- and treat a difference as a change by hand; otherwise the heat demand wrote the old setpoint back 2 s later.
 -- own: the heat demand setpoint the driver wrote just before the drop without getting an answer (see own_setpoint).
 setpoint_after_reconnect = function(dev, before, after, own)
   before, after = tonumber(before), tonumber(after)
@@ -840,6 +845,8 @@ local function poll(driver, dev, forced)
       local ok, merr = pcall(manual_setpoint, dev, old_sp, c.model.values.tgt_temp)
       if not ok then log.error(TAG .. " heat demand: " .. tostring(merr)) end
     end
+    -- the values are in step again: look at the heat demand too (a pause that ran out, a write to try again)
+    apply_demand_soon(dev)
   else
     log.warn(TAG .. " poll failed: " .. tostring(err))
   end
@@ -955,7 +962,8 @@ local driver = Driver("honeywell-t6-homekit-local", {
   discovery = discovery,
   _t6 = { conns = conns, apply_demand = function(dev) return apply_demand(dev) end,
           setpoint_after_reconnect = function(dev, a, b, own) return setpoint_after_reconnect(dev, a, b, own) end,
-          poll = function(dev) return poll(nil, dev, true) end,
+          poll = function(dev, when_idle) return poll(nil, dev, not when_idle) end,
+          IDLE_POLL = IDLE_POLL,
           session_once = function(dev, c, sock, pairing) return session_once(dev, c, sock, pairing, function() end) end,
         }, -- for tests
   lifecycle_handlers = { init = device_init, added = device_added, infoChanged = info_changed,

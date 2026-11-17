@@ -318,3 +318,34 @@ def test_setpoint_command_compares_with_the_setpoint_at_the_answer():
       FAKE.put = function(self, list) FAKE.put = put; C.model.values.tgt_temp = 22.0; return put(self, list) end''')
     assert g.SETPOINT_CMD(21) == 21
     assert g.SUMMARY() == b"none; paused: Keuken"
+
+
+def test_keepalive_asks_when_nothing_came_in():
+    # 17-11: the T6 drops its session without telling when it changes access point; the hub then hears nothing
+    # until it sends something. A quiet minute is enough to ask; a session that just spoke is left alone.
+    lua, g = session_setup()
+    lua.execute(b"GETS = 0; FAKE.get = function() GETS = GETS + 1; return { { aid = 1, iid = 12, value = 19.3 } } end")
+    idle = lua.eval(b"DRIVER._t6.IDLE_POLL")
+    assert idle <= 120
+    lua.execute(b"C.last_rx = py_time()")
+    lua.execute(b"DRIVER._t6.poll(DEV, true)")
+    assert lua.eval(b"GETS") == 0                    # something came in just now
+    lua.execute(b"C.last_rx = py_time() - DRIVER._t6.IDLE_POLL - 1")
+    lua.execute(b"DRIVER._t6.poll(DEV, true)")
+    assert lua.eval(b"GETS") == 1
+    lua.execute(b"DRIVER._t6.poll(DEV)")             # refresh from the app: always
+    assert lua.eval(b"GETS") == 2
+
+
+def test_poll_also_looks_at_the_heat_demand():
+    # a pause that ran out is noticed at the next poll, not only when the thermostat happens to send something
+    lua, g = session_setup()
+    lua.execute(SETPOINT)
+    assert g.ROOM(b"Keuken", b"on") == 20.0
+    g.SETPOINT_CMD(18)                               # lowered by hand: the kitchen is paused
+    assert g.SUMMARY() == b"none; paused: Keuken"
+    lua.execute(b'local p = DEV:get_field("heat_paused"); p.Keuken = 1; DEV:set_field("heat_paused", p)')
+    lua.execute(b"FAKE.get = function() return { { aid = 1, iid = 12, value = 19.3 } } end")
+    lua.execute(b"DRIVER._t6.poll(DEV)")
+    assert g.SUMMARY() == b"Keuken"
+    assert lua.eval(b"C.model.values.tgt_temp") == 20.0

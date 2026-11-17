@@ -14,7 +14,7 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-17a"
+local BUILD = "2026-11-17b"
 local PAIR_MAX_FAILS = 5
 -- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
 -- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
@@ -55,6 +55,14 @@ local DEMAND_FIELD = "heat_rooms"
 local apply_demand_soon -- defined after the session code
 local manual_setpoint   -- same
 local setpoint_after_reconnect -- same
+
+-- The driver's own heat demand write while it has not been answered. The T6 can apply a write and close its
+-- session before it answers; that setpoint then shows up after the reconnect (or as an event) and is not a
+-- change by hand. Without this, lowering the setpoint because fewer rooms ask could pause the remaining rooms.
+local function own_setpoint(own, value)
+  own, value = tonumber(own), tonumber(value)
+  return own ~= nil and value ~= nil and math.abs(own - value) < 0.01
+end
 
 local tempMeas = capabilities.temperatureMeasurement
 local heatSp = capabilities.thermostatHeatingSetpoint
@@ -369,7 +377,9 @@ local function session_once(dev, c, sock, pairing, on_up)
     safe_emit(dev, model, nil)
     c.last_rx = now()
     log.info(TAG .. " session up")
-    setpoint_after_reconnect(dev, prev_sp, model.values.tgt_temp)
+    local own_sp = c.own_sp
+    c.own_sp = nil
+    setpoint_after_reconnect(dev, prev_sp, model.values.tgt_temp, own_sp)
     apply_demand_soon(dev)
     on_up()
     -- The reader loop owns the socket from now on. It wakes up every READ_IDLE seconds: on the hub,
@@ -380,7 +390,8 @@ local function session_once(dev, c, sock, pairing, on_up)
       local old_sp = model.values.tgt_temp
       local touched = model_lib.apply(model, chars)
       if touched then safe_emit(dev, model, touched) end
-      if touched and touched.tgt_temp then -- changed on the thermostat (or in its own app)
+      -- changed on the thermostat (or in its own app); not the echo of a heat demand write that is still running
+      if touched and touched.tgt_temp and not own_setpoint(c.own_sp, model.values.tgt_temp) then
         local ok, err = pcall(manual_setpoint, dev, old_sp, model.values.tgt_temp)
         if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
       end
@@ -576,9 +587,10 @@ local function write(dev, field, value, what)
     log.error(TAG .. " " .. what .. " failed: " .. tostring(err))
     return false
   end
+  local prev = c.model.values[field] -- read after the answer: another write may have run while this one waited
   local touched = model_lib.apply(c.model, { { aid = c.model.aid, iid = c.model.chars[field], value = value } })
   if touched then safe_emit(dev, c.model, touched) end
-  return true
+  return true, prev
 end
 
 local function handle_setpoint(driver, dev, cmd)
@@ -590,8 +602,8 @@ local function handle_setpoint(driver, dev, cmd)
     log.info(string.format("%s setpoint %s read as °F -> %s °C", TAG, tostring(cmd.args.setpoint), tostring(v)))
   end
   cosock.spawn(function()
-    local old_sp = c and c.model and c.model.values.tgt_temp
-    if write(dev, "tgt_temp", v, "setpoint " .. tostring(v)) then
+    local written, old_sp = write(dev, "tgt_temp", v, "setpoint " .. tostring(v))
+    if written then
       local ok, err = pcall(manual_setpoint, dev, old_sp, v)
       if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
     end
@@ -701,7 +713,11 @@ local function apply_demand(dev)
   if target and (not cur_sp or math.abs(target - cur_sp) > 0.01) then
     log.info(string.format("%s heat demand: %d room(s), temperature %s, setpoint %s -> %s", TAG, n,
       tostring(v.cur_temp), tostring(cur_sp), tostring(target)))
+    c.own_sp = target
     done = write(dev, "tgt_temp", target, "heat demand setpoint " .. tostring(target))
+    -- Answered (written or refused): nothing is pending. Not answered and the connection gone: the T6 may
+    -- still have applied it; setpoint_after_reconnect then knows the new setpoint is not a change by hand.
+    if done or c.alive then c.own_sp = nil end
   end
   -- Remember the number of rooms only once the setpoint is written. If the write fails (the T6 closes
   -- its HomeKit session every 20 min), the next try after the reconnect still sees the change; before,
@@ -759,9 +775,15 @@ end
 -- The T6 closes its HomeKit session when it is operated on the thermostat itself, so that change never arrives
 -- as an event: the new setpoint is only seen after the reconnect. Compare it with the setpoint from before the
 -- drop and treat a difference as a change by hand; otherwise the heat demand wrote the old setpoint back 2 s later.
-setpoint_after_reconnect = function(dev, before, after)
+-- own: the heat demand setpoint the driver wrote just before the drop without getting an answer (see own_setpoint).
+setpoint_after_reconnect = function(dev, before, after, own)
   before, after = tonumber(before), tonumber(after)
   if not (before and after) or math.abs(before - after) < 0.01 then return end
+  if own_setpoint(own, after) then
+    log.info(string.format("%s setpoint %s -> %s is the heat demand write from just before the drop", TAG,
+      tostring(before), tostring(after)))
+    return
+  end
   log.info(string.format("%s setpoint changed while disconnected: %s -> %s", TAG, tostring(before), tostring(after)))
   local ok, err = pcall(manual_setpoint, dev, before, after)
   if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
@@ -810,8 +832,14 @@ local function poll(driver, dev, forced)
   if not forced and c.last_rx and now() - c.last_rx < IDLE_POLL then return end
   local chars, err = c.session:get(model_lib.read_ids(c.model))
   if chars then
+    local old_sp = c.model.values.tgt_temp -- read after the answer: a write may have run while the poll waited
     local touched = model_lib.apply(c.model, chars)
     if touched then safe_emit(dev, c.model, touched) end
+    -- a setpoint change that never arrived as an event is still a change on the thermostat
+    if touched and touched.tgt_temp and not own_setpoint(c.own_sp, c.model.values.tgt_temp) then
+      local ok, merr = pcall(manual_setpoint, dev, old_sp, c.model.values.tgt_temp)
+      if not ok then log.error(TAG .. " heat demand: " .. tostring(merr)) end
+    end
   else
     log.warn(TAG .. " poll failed: " .. tostring(err))
   end
@@ -926,7 +954,10 @@ end
 local driver = Driver("honeywell-t6-homekit-local", {
   discovery = discovery,
   _t6 = { conns = conns, apply_demand = function(dev) return apply_demand(dev) end,
-          setpoint_after_reconnect = function(dev, a, b) return setpoint_after_reconnect(dev, a, b) end }, -- for tests
+          setpoint_after_reconnect = function(dev, a, b, own) return setpoint_after_reconnect(dev, a, b, own) end,
+          poll = function(dev) return poll(nil, dev, true) end,
+          session_once = function(dev, c, sock, pairing) return session_once(dev, c, sock, pairing, function() end) end,
+        }, -- for tests
   lifecycle_handlers = { init = device_init, added = device_added, infoChanged = info_changed,
                          removed = device_removed },
   capability_handlers = {

@@ -197,3 +197,124 @@ def test_lowered_on_the_thermostat_during_a_drop_pauses_the_rooms():
     lua.execute(b'DRIVER._t6.setpoint_after_reconnect(DEV, 18.5, 18.5)')   # nothing changed: no effect
     lua.execute(b'DRIVER._t6.setpoint_after_reconnect(DEV, nil, 18.5)')    # first connect: no effect
     assert sp() == 18.5
+
+
+# a fake HomeKit session, so session_once runs as on the hub: connect, read the thermostat, then the drop
+SESSION = rb'''
+local hap = require "hap_client"
+C = DRIVER._t6.conns["t6"]
+TGT, CUR = 19.5, 19.3
+FAKE = {}
+function FAKE.pair_verify() return true end
+function FAKE.accessories() return { { aid = 1, services = { { type = "4A", characteristics = {
+  { type = "F", iid = 10, value = 0 }, { type = "33", iid = 11, value = 1 },
+  { type = "11", iid = 12, value = CUR },
+  { type = "35", iid = 14, value = TGT, minValue = 5, maxValue = 30, minStep = 0.5 } } } } } } end
+function FAKE.subscribe() return true end
+function FAKE.read_message() return nil, "closed" end
+function FAKE.put(self, list) WRITES[#WRITES + 1] = list[1].value; TGT = list[1].value; return {} end
+hap.session = function() return FAKE end
+-- one session: connect, read the thermostat (tgt = what it shows now), run until it closes
+function UP(tgt, cur)
+  if tgt then TGT = tgt end
+  if cur then CUR = cur end
+  local reason = DRIVER._t6.session_once(DEV, C, { settimeout = function() end, close = function() end }, {})
+  C.alive = false
+  return reason
+end
+-- the next heat demand write reaches the thermostat, but the session closes before the answer
+function UNANSWERED()
+  local put = FAKE.put
+  FAKE.put = function(self, list)
+    FAKE.put = put
+    TGT = list[1].value
+    C.alive = false
+    return nil, "connection closed"
+  end
+end
+function SUMMARY()
+  local last
+  for _, e in ipairs(DEV.events) do if e.path:find("heatDemand.summary", 1, true) then last = e.arg end end
+  return last
+end
+'''
+
+
+def session_setup():
+    lua, g = setup()
+    lua.execute(SESSION)
+    assert g.UP(19.5, 19.3) == b"session closed: closed"
+    lua.execute(b"C.alive = true")                   # connected again, nothing changed meanwhile
+    return lua, g
+
+
+def test_own_write_applied_before_a_drop_is_not_a_change_by_hand():
+    # Fewer rooms ask, so the driver lowers the setpoint. The T6 applies it and closes the session before it
+    # answers. After the reconnect the lower setpoint must not pause the room that still asks.
+    lua, g = session_setup()
+    room = g.ROOM
+    assert room(b"Keuken", b"on") == 20.0
+    assert room(b"Noi", b"on") == 20.5
+    g.UNANSWERED()
+    assert room(b"Noi", b"off") == 20.5              # no answer: the driver still believes 20.5
+    assert lua.eval(b"C.own_sp") == 20.0 and lua.eval(b"TGT") == 20.0
+    assert g.UP() == b"session closed: closed"       # reconnect: the thermostat shows 20.0
+    assert g.SUMMARY() == b"Keuken"
+    assert lua.eval(b"C.own_sp") is None
+    assert lua.eval(b"C.model.values.tgt_temp") == 20.0
+    assert lua.eval(b'DEV:get_field("demand_last_n")') == 1
+
+
+def test_lowered_by_hand_during_a_drop_with_the_real_session_code():
+    lua, g = session_setup()
+    assert g.ROOM(b"Keuken", b"on") == 20.0
+    lua.execute(b"C.alive = false")
+    writes = len(g.WRITES)
+    g.UP(18.5)                                       # lowered on the thermostat while disconnected
+    assert g.SUMMARY() == b"none; paused: Keuken"
+    assert len(g.WRITES) == writes and lua.eval(b"TGT") == 18.5   # not written back
+    g.UP(22.0)                                       # raised on the thermostat during the next drop
+    assert g.SUMMARY() == b"Keuken"
+    assert lua.eval(b"TGT") == 22.0                  # higher than the heat demand asks: left alone
+
+
+def test_unanswered_write_followed_by_a_change_by_hand():
+    # the unanswered write is only excused when the thermostat shows exactly that setpoint afterwards
+    lua, g = session_setup()
+    room = g.ROOM
+    assert room(b"Keuken", b"on") == 20.0
+    assert room(b"Noi", b"on") == 20.5
+    g.UNANSWERED()
+    room(b"Noi", b"off")
+    g.UP(17.0)                                       # and then lowered by hand to 17 during the drop
+    assert g.SUMMARY() == b"none; paused: Keuken"
+    assert lua.eval(b"TGT") == 17.0
+
+
+def test_refused_write_leaves_nothing_pending():
+    lua, g = session_setup()
+    lua.execute(b'FAKE.put = function() return nil, "HTTP 400" end')
+    assert g.ROOM(b"Keuken", b"on") == 19.5          # refused, the session stays up
+    assert lua.eval(b"C.own_sp") is None
+
+
+def test_poll_sees_a_setpoint_change_that_came_without_an_event():
+    lua, g = session_setup()
+    assert g.ROOM(b"Keuken", b"on") == 20.0
+    lua.execute(b"FAKE.get = function() return { { aid = 1, iid = 14, value = 18.0 } } end")
+    lua.execute(b"DRIVER._t6.poll(DEV)")
+    assert g.SUMMARY() == b"none; paused: Keuken"
+    lua.execute(b"DRIVER._t6.apply_demand(DEV)")
+    assert lua.eval(b"C.model.values.tgt_temp") == 18.0
+
+
+def test_setpoint_command_compares_with_the_setpoint_at_the_answer():
+    # a heat demand write finished while the setpoint command waited for its turn: 22 -> 21 is lower, not higher
+    lua, g = session_setup()
+    lua.execute(SETPOINT)
+    assert g.ROOM(b"Keuken", b"on") == 20.0
+    lua.execute(b'''
+      local put = FAKE.put
+      FAKE.put = function(self, list) FAKE.put = put; C.model.values.tgt_temp = 22.0; return put(self, list) end''')
+    assert g.SETPOINT_CMD(21) == 21
+    assert g.SUMMARY() == b"none; paused: Keuken"

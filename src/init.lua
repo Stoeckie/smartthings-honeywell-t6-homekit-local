@@ -14,7 +14,7 @@ local bignum = require "bignum"
 local model_lib = require "t6_model"
 local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 
-local BUILD = "2026-11-15b"
+local BUILD = "2026-11-17a"
 local PAIR_MAX_FAILS = 5
 -- failed pairing attempts in a row are kept in the persistent device field "pair_fails", so a driver
 -- restart does not allow PAIR_MAX_FAILS more attempts on a thermostat that may lock itself
@@ -54,6 +54,7 @@ local demand_cap = capabilities["silvervalley08660.heatDemand"]
 local DEMAND_FIELD = "heat_rooms"
 local apply_demand_soon -- defined after the session code
 local manual_setpoint   -- same
+local setpoint_after_reconnect -- same
 
 local tempMeas = capabilities.temperatureMeasurement
 local heatSp = capabilities.thermostatHeatingSetpoint
@@ -359,6 +360,7 @@ local function session_once(dev, c, sock, pairing, on_up)
   if ok then accs, verr = s:accessories() end
   if accs then model, verr = model_lib.build(accs) end
   if model then
+    local prev_sp = c.model and c.model.values and c.model.values.tgt_temp
     c.model = model
     local _, serr = s:subscribe(model_lib.read_ids(model))
     if serr then log.warn(TAG .. " subscribe: " .. tostring(serr)) end
@@ -367,6 +369,7 @@ local function session_once(dev, c, sock, pairing, on_up)
     safe_emit(dev, model, nil)
     c.last_rx = now()
     log.info(TAG .. " session up")
+    setpoint_after_reconnect(dev, prev_sp, model.values.tgt_temp)
     apply_demand_soon(dev)
     on_up()
     -- The reader loop owns the socket from now on. It wakes up every READ_IDLE seconds: on the hub,
@@ -753,6 +756,17 @@ manual_setpoint = function(dev, old, new)
   end
 end
 
+-- The T6 closes its HomeKit session when it is operated on the thermostat itself, so that change never arrives
+-- as an event: the new setpoint is only seen after the reconnect. Compare it with the setpoint from before the
+-- drop and treat a difference as a change by hand; otherwise the heat demand wrote the old setpoint back 2 s later.
+setpoint_after_reconnect = function(dev, before, after)
+  before, after = tonumber(before), tonumber(after)
+  if not (before and after) or math.abs(before - after) < 0.01 then return end
+  log.info(string.format("%s setpoint changed while disconnected: %s -> %s", TAG, tostring(before), tostring(after)))
+  local ok, err = pcall(manual_setpoint, dev, before, after)
+  if not ok then log.error(TAG .. " heat demand: " .. tostring(err)) end
+end
+
 local function handle_set_room(driver, dev, cmd)
   local room = tostring(cmd.args.room or ""):gsub("^%s+", ""):gsub("%s+$", ""):sub(1, 40)
   if room == "" then return end
@@ -911,7 +925,8 @@ end
 
 local driver = Driver("honeywell-t6-homekit-local", {
   discovery = discovery,
-  _t6 = { conns = conns, apply_demand = function(dev) return apply_demand(dev) end }, -- for tests
+  _t6 = { conns = conns, apply_demand = function(dev) return apply_demand(dev) end,
+          setpoint_after_reconnect = function(dev, a, b) return setpoint_after_reconnect(dev, a, b) end }, -- for tests
   lifecycle_handlers = { init = device_init, added = device_added, infoChanged = info_changed,
                          removed = device_removed },
   capability_handlers = {

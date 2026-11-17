@@ -179,3 +179,21 @@ def test_pause_ends_after_pause_minutes():
     lua.execute(b'local p = DEV:get_field("heat_paused"); p.Keuken = 1; DEV:set_field("heat_paused", p)')
     lua.execute(b'DRIVER._t6.apply_demand(DEV)')
     assert sp() == 20.0
+
+
+def test_lowered_on_the_thermostat_during_a_drop_pauses_the_rooms():
+    # DS 17-11: the T6 closes its session when it is operated; after the reconnect the driver read 19.5 and
+    # wrote the heat demand setpoint back 2 s later. The change during the drop now counts as a change by hand.
+    lua, g = setup()
+    room = g.ROOM
+    assert room(b"Keuken", b"on") == 20.0
+    sp = lambda: lua.eval(b'DRIVER._t6.conns["t6"].model.values.tgt_temp')
+    g.SET(b"tgt_temp", 18.5)                         # what the fresh model holds after the reconnect
+    lua.execute(b'DRIVER._t6.setpoint_after_reconnect(DEV, 20.0, 18.5)')
+    lua.execute(b'DRIVER._t6.apply_demand(DEV)')
+    assert sp() == 18.5
+    summ = [e[b"arg"] for e in g.DEV[b"events"].values() if e[b"path"].endswith(b"heatDemand.summary")]
+    assert summ[-1] == b"none; paused: Keuken", summ
+    lua.execute(b'DRIVER._t6.setpoint_after_reconnect(DEV, 18.5, 18.5)')   # nothing changed: no effect
+    lua.execute(b'DRIVER._t6.setpoint_after_reconnect(DEV, nil, 18.5)')    # first connect: no effect
+    assert sp() == 18.5

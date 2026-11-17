@@ -80,7 +80,10 @@ A complete example of the rule (my own setup with placeholder IDs) and the logic
 
 The T6 drops its HomeKit session without telling the hub every time it moves to another Wi-Fi access point or rejoins the Wi-Fi. With several access points in the house that can be several times an hour. On the hub the connection still looks fine, but nothing arrives any more. The driver therefore asks for the values when nothing came in for a minute; if the session turns out to be gone it reconnects, which takes about 10 seconds, and **Last drop** shows it. A request does not harm a live session.
 
-Two things that help on the network side: lock the thermostat to its nearest access point (UniFi: client settings, Lock to Access Point), and do not block the thermostat from the internet. A T6 that cannot reach the Resideo cloud appears to rejoin the Wi-Fi every 5 to 15 minutes (seen here after blocking it in the firewall), and every time the session is lost.
+Two things that help on the network side:
+
+* **Do not block the thermostat from the internet.** The only thing a T6 does on the internet is one HTTPS connection to a Resideo server at Azure (here `lcc-prodsf-prov02x.eastus.cloudapp.azure.com`, port 443), tried again every few minutes. When that fails twice it "repairs" its Wi-Fi: it hops to another access point, even a much weaker one, or disconnects and joins again. Measured here with the firewall log next to the Wi-Fi log: a cycle of 5 to 9 minutes, and every time the session is lost. No ping, DNS or time server is involved, and the connection is TLS, so it cannot be answered locally.
+* Lock the thermostat to its nearest access point (UniFi: client settings, Lock to Access Point), so it cannot hop to a weaker one.
 
 ## Offline and online notification
 
